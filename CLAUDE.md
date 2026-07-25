@@ -116,7 +116,7 @@ prompts/  turn_planner.md и synthesizer.md загружаются;
 `SynthesisResult` переписан под strict (открытые словари и `ge/le` API не принимает);
 починена инверсия оси EI; промпт синтезатора приведён к новой схеме. Тесты 32 → 42.
 
-**Этап 2B закрыт** (коммит `c6f1221`): колонка `sessions.state_json`, rehydrate активного
+**Этап 2B закрыт** (коммит `af592e5`): колонка `sessions.state_json`, rehydrate активного
 диалога из БД, TTL-эвикция `USER_STATES`. `_get_state` стал async. Снимок затирается
 при завершении сессии. Тесты 42 → 52.
 

@@ -115,7 +115,7 @@ Verify: ✅ нет регексп-парсинга JSON; ✅ тесты на т�
 
 ### ✅ 2B — состояние
 
-Закрыт, коммит `c6f1221`.
+Закрыт, коммит `af592e5`.
 
 - Колонка `sessions.state_json` (JSONB), миграция —
   `migrations/001_add_sessions_state_json.sql`. Заведён каталог `migrations/`:
