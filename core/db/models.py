@@ -36,9 +36,9 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     # Согласие на обработку данных (психологический профиль = спец. категория ПДн).
-    # NULL = согласие не давалось.
-    # TODO (Этап 1): экран согласия перед первым диалогом + запрет сбора без consent_at;
-    # TODO (Этап 1): retention — срок хранения сессий и /delete_me (право на удаление).
+    # NULL = согласие не давалось, и тогда не создаётся ни сессия, ни сообщения:
+    # гейт живёт в app/telegram_bot.py::_has_consent. Текст и версия — app/consent.py.
+    # При смене CONSENT_VERSION старое согласие перестаёт действовать и спрашивается заново.
     consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consent_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
 

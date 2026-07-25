@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,53 @@ class Repo:
         )
         await self.db.execute(stmt)
         await self.db.commit()
+
+    async def get_consent_version(self, telegram_id: int) -> str | None:
+        """
+        Действующая редакция согласия этого пользователя. None — согласия нет.
+
+        Читается до любого сбора данных: без согласия не создаётся ни сессия,
+        ни сообщения, ни вызов LLM.
+        """
+        res = await self.db.execute(
+            select(User.consent_version)
+            .where(User.telegram_id == telegram_id, User.consent_at.isnot(None))
+        )
+        row = res.first()
+        return row[0] if row else None
+
+    async def set_consent(self, telegram_id: int, username: str | None, version: str) -> None:
+        stmt = insert(User).values(
+            telegram_id=telegram_id,
+            username=username,
+            consent_at=utcnow(),
+            consent_version=version,
+        ).on_conflict_do_update(
+            index_elements=[User.telegram_id],
+            set_={"username": username, "consent_at": utcnow(), "consent_version": version},
+        )
+        await self.db.execute(stmt)
+        await self.db.commit()
+
+    async def delete_user(self, telegram_id: int) -> bool:
+        """
+        Право на удаление: сносим пользователя, каскад забирает сессии, сообщения,
+        сигналы, синтезы и akme. Возвращает False, если удалять было нечего.
+        """
+        res = await self.db.execute(delete(User).where(User.telegram_id == telegram_id))
+        await self.db.commit()
+        return bool(res.rowcount)
+
+    async def delete_expired_sessions(self, days: int) -> int:
+        """
+        Ретеншен: сессии старше `days` дней удаляются каскадом.
+
+        Пользователь и его согласие остаются — удаляются только разговоры.
+        """
+        cutoff = utcnow() - timedelta(days=days)
+        res = await self.db.execute(delete(DbSession).where(DbSession.started_at < cutoff))
+        await self.db.commit()
+        return res.rowcount or 0
 
     async def add_message(
         self,

@@ -143,9 +143,13 @@ class Orchestrator:
                 state.add_note(f"module_error:{getattr(mod, '__name__', str(mod))}:{e}")
 
         # 3) update validity (heuristic)
-        vu = update_validity_from_text(user_text)
-        state.clamp_vl(vu.delta)
-        state.add_note(f"validity:{vu.note}")
+        # Пустой ввод — это не «плохой материал», а «нового материала нет»: так ход
+        # приходит с кнопки «✅ Подвести итог». Раньше нажатие кнопки снижало
+        # validity_level на 1, то есть подтверждение итога портило профиль.
+        if user_text:
+            vu = update_validity_from_text(user_text)
+            state.clamp_vl(vu.delta)
+            state.add_note(f"validity:{vu.note}")
 
         # 4) recompute trait closed + goals
         _update_trait_closed(state)

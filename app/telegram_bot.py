@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pydantic import ValidationError
-from telegram import Update
+from telegram import ReplyKeyboardRemove, Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -16,6 +16,11 @@ from telegram.ext import (
 )
 from core.stt import STTClient
 from app.buttons import BASE_KB, AFTER_SYNTH_KB, SYNTH_CONFIRM_KB, VOICE_KB
+from app.consent import (
+    AGREE, DECLINE, DELETE_CANCEL, DELETE_CONFIRM,
+    CONSENT_CHANGED_TEXT, CONSENT_KB, CONSENT_TEXT, DECLINE_TEXT,
+    DELETE_KB, NEED_CONSENT_TEXT,
+)
 from app.formatters import format_akme
 from modules.akme_vector import akme_vector_from_synthesis
 
@@ -24,11 +29,23 @@ from core.models import ConversationState, PreviousProfile, TraitScores
 from core.scoring import mbti_from_traits
 from core.llm import AsyncLLMClient
 from core.utils import load_text
+from core.config import CONSENT_VERSION, RETENTION_DAYS
 
 from core.db.database import get_sessionmaker, init_db
 from core.db.repo import Repo
 from core.db.export import export_session_full
 
+
+HELP_TEXT = (
+    "Мы просто разговариваем, я аккуратно собираю наблюдения.\n"
+    "Когда данных будет достаточно — я сам предложу подвести итог 🙂\n\n"
+    "Команды:\n"
+    "/start — начать\n"
+    "/akme — практические рекомендации (после итога)\n"
+    "/export — выгрузка текущей сессии в Excel\n"
+    "/reset — сброс\n"
+    "/delete_me — удалить все мои данные\n"
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -130,6 +147,25 @@ async def _save_message_to_db(state: ConversationState, role: str, text: str, so
     async with SessionMaker() as db:
         repo = Repo(db)
         await repo.add_message(uuid.UUID(state.session_id), role=role, text=text, source=source)
+
+async def _has_consent(tg_id: int) -> bool:
+    """
+    Дал ли человек согласие на действующую редакцию.
+
+    Единственное, что мы знаем о нём до согласия, — telegram_id: иначе согласие
+    не к чему привязать. Всё остальное собирается только после «да».
+    """
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        version = await Repo(db).get_consent_version(tg_id)
+
+    return version == CONSENT_VERSION
+
+
+async def _ask_for_consent(update: Update, changed: bool = False) -> None:
+    text = (CONSENT_CHANGED_TEXT + "\n\n" + CONSENT_TEXT) if changed else CONSENT_TEXT
+    await update.message.reply_text(text, reply_markup=CONSENT_KB, parse_mode="Markdown")
+
 
 def _previous_profile_from_row(row: tuple[datetime, dict] | None) -> PreviousProfile | None:
     """
@@ -295,12 +331,21 @@ async def _persist_akme(state: ConversationState, recommendations_text: str, vec
 # ----------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    state = _put_fresh_state(user_id)
-
     tg = update.effective_user
 
-    # DB: user + session
+    if not await _has_consent(tg.id):
+        await _ask_for_consent(update)
+        return
+
+    await _begin_conversation(update, tg)
+
+
+async def _begin_conversation(update: Update, tg) -> None:
+    """Начинает разговор. Вызывается только когда согласие уже есть."""
+    state = _put_fresh_state(tg.id)
+
+    # закрываем прошлую активную сессию, иначе они копятся вечно
+    await _close_active_session(tg.id, status="reset")
     await _ensure_db_session_for_user(state, tg.id, tg.username)
 
     await update.message.reply_text(
@@ -310,14 +355,55 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def _close_active_session(tg_id: int, status: str) -> None:
+    """Закрывает незавершённую сессию пользователя, если она была."""
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        repo = Repo(db)
+        row = await repo.get_active_session(tg_id)
+        if row:
+            await repo.finish_session(row[0], validity_level_end=None,
+                                      dialogue_saturated=False, status=status)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = (update.message.text or "").strip()
+    tg = update.effective_user
+
+    # --- СОГЛАСИЕ: до него ничего не сохраняем и не зовём LLM ---
+
+    if text == AGREE:
+        SessionMaker = get_sessionmaker()
+        async with SessionMaker() as db:
+            await Repo(db).set_consent(tg.id, tg.username, CONSENT_VERSION)
+        logger.info("Пользователь %s дал согласие, редакция %s", tg.id, CONSENT_VERSION)
+        await _begin_conversation(update, tg)
+        return
+
+    if text == DELETE_CONFIRM:
+        await _delete_everything(update, tg.id)
+        return
+
+    if text == DELETE_CANCEL:
+        await update.message.reply_text("Ничего не удаляю 🙂", reply_markup=BASE_KB)
+        return
+
+    if text == DECLINE:
+        await update.message.reply_text(DECLINE_TEXT, reply_markup=ReplyKeyboardRemove())
+        return
+
+    if not await _has_consent(tg.id):
+        await update.message.reply_text(NEED_CONSENT_TEXT, reply_markup=ReplyKeyboardRemove())
+        return
+
+    if text == "ℹ️ Помощь":
+        await update.message.reply_text(HELP_TEXT, reply_markup=BASE_KB)
+        return
 
     state = await _get_state(user_id)
     orchestrator: Orchestrator = context.bot_data["orchestrator"]
 
-    tg = update.effective_user
     await _ensure_db_session_for_user(state, tg.id, tg.username)
 
     # --- КНОПКИ УПРАВЛЕНИЯ ---
@@ -342,18 +428,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ок! Начнём заново 🙂", reply_markup=BASE_KB)
         return
 
-    if text == "ℹ️ Помощь":
-        await update.message.reply_text(
-            "Мы просто разговариваем, я аккуратно собираю сигналы.\n"
-            "Когда данных будет достаточно — я сам предложу подвести итог 🙂\n\n"
-            "Команды:\n"
-            "/start — начать\n"
-            "/akme — практические рекомендации (после итога)\n"
-            "/export — выгрузка текущей сессии в Excel\n"
-            "/reset — сброс\n",
-            reply_markup=BASE_KB
-        )
-        return
     if text == "📝 Показать распознанный текст":
         if not state.last_transcript:
             await update.message.reply_text(
@@ -463,10 +537,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    tg = update.effective_user
+
+    if not await _has_consent(tg.id):
+        await update.message.reply_text(NEED_CONSENT_TEXT, reply_markup=ReplyKeyboardRemove())
+        return
+
     state = await _get_state(user_id)
     orchestrator: Orchestrator = context.bot_data["orchestrator"]
-
-    tg = update.effective_user
     await _ensure_db_session_for_user(state, tg.id, tg.username)
 
     # 1) достаём voice/audio
@@ -551,6 +629,34 @@ async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _persist_akme(state, recommendations_text=text, vector_json=asdict(akme))
 
     await update.message.reply_text(text, reply_markup=AFTER_SYNTH_KB)
+
+
+async def delete_me_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Право на удаление. Шаг 1: предупреждаем, что это безвозвратно."""
+    await update.message.reply_text(
+        "Это удалит **всё**: наши сообщения, собранные наблюдения, профиль "
+        "и рекомендации. Восстановить будет нельзя.\n\n"
+        "Точно удаляем?",
+        reply_markup=DELETE_KB,
+        parse_mode="Markdown",
+    )
+
+
+async def _delete_everything(update: Update, tg_id: int) -> None:
+    """Шаг 2: сносим пользователя, каскад забирает всё остальное."""
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        deleted = await Repo(db).delete_user(tg_id)
+
+    USER_STATES.pop(tg_id, None)
+    _LAST_SEEN.pop(tg_id, None)
+    logger.info("Данные пользователя %s удалены по запросу (было что удалять: %s)", tg_id, deleted)
+
+    await update.message.reply_text(
+        "Готово. Все данные удалены.\n\n"
+        "Если захочешь начать заново — /start.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
 
 async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -639,12 +745,22 @@ def run_bot():
     async def _post_init(application):
         await init_db()
 
+        # Ретеншен на старте процесса. Это половина решения: пока бот не
+        # перезапускают, просроченное лежит. В проде нужен cron или воркер —
+        # см. docs/ROADMAP.md.
+        SessionMaker = get_sessionmaker()
+        async with SessionMaker() as db:
+            removed = await Repo(db).delete_expired_sessions(RETENTION_DAYS)
+        if removed:
+            logger.info("Ретеншен: удалено сессий старше %d дней: %d", RETENTION_DAYS, removed)
+
     app.post_init = _post_init
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("akme", akme_cmd))
     app.add_handler(CommandHandler("reset", reset_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
+    app.add_handler(CommandHandler("delete_me", delete_me_cmd))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_audio))

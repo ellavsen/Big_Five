@@ -55,10 +55,15 @@ def saved(monkeypatch) -> list[dict]:
     async def _noop(*args, **kwargs):
         return None
 
+    async def _consented(tg_id: int) -> bool:
+        return True
+
     monkeypatch.setattr(bot, "_save_message_to_db", _save)
     monkeypatch.setattr(bot, "_ensure_db_session_for_user", _noop)
     monkeypatch.setattr(bot, "_persist_step_state", _noop)
     monkeypatch.setattr(bot, "_persist_synthesis_and_finish", _noop)
+    # эти тесты про кнопки, а не про согласие — считаем, что оно уже дано
+    monkeypatch.setattr(bot, "_has_consent", _consented)
     return calls
 
 
