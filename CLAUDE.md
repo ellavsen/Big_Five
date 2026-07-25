@@ -79,9 +79,15 @@ app/telegram_bot.py (Telegram I/O, USER_STATES in-memory)
       → core/validity.py  валидность, закрытие осей, критерий 2612
       → core/transitions.py  выбор агента и приоритетной цели
       → core/db/          SQLAlchemy async → Postgres (repo.py — единственный слой доступа)
-prompts/  turn_planner.md и synthesizer.md загружаются;
-          diagnost.md и interpreter.md НЕ загружаются нигде (см. Этап 3)
+prompts/  turn_planner.md и synthesizer.md — оба загружаются, мёртвых промптов нет
 ```
+
+**Агентов нет.** `chosen_agent` — это режим одного планировщика хода
+(`diagnost` — вопрос, `interpreter` — короткое отражение, `synthesizer` — итог),
+а не отдельная модель и не отдельный промпт. Режимы диалога живут внутри
+`turn_planner.md`, синтез — отдельным вызовом. Поле называется «агентом» по
+историческим причинам; переименование потащило бы за собой сохранённое
+состояние в `sessions.state_json` ради косметики.
 
 `modules/synthesizer.py` — детерминированный разбор осей (`core / compensated / boundary`),
 подключён в промпт синтеза полем `deterministic_profile`. Признак компенсации читается
@@ -194,8 +200,6 @@ JSON-колонок объявляйте `JSONB(none_as_null=True)`. У `session
 - Кнопка «✅ Подвести итог» вызывает `step(state, "")` → пустой текст снижает `validity_level` на 1.
 - `users.telegram_id` получил ненужный `DEFAULT nextval(...)`: SQLAlchemy сделал
   BigInteger-PK автоинкрементным, хотя id приходит от Telegram.
-- `prompts/diagnost.md` и `interpreter.md` не загружаются — свернуть мнимую
-  мультиагентность в Этапе 3.
 - Дефекты закрытия осей (`direct_example` от одного слова, `soft_axis_closed` без
   проверки согласованности, `source="module"` вместо `"energy"`, дубли сигналов от LLM)
   собраны в 2C — см. ROADMAP.
