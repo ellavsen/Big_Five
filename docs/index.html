@@ -144,9 +144,12 @@
 
   .trait-note { margin-top: 6px; font-size: 13px; color: var(--muted); }
 
+  /* Переносится, потому что на узком экране три подписи в строку не встают. */
   .legend {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
+    gap: 4px 14px;
     margin-top: 20px;
     padding-top: 14px;
     border-top: 1px solid var(--border);
@@ -484,7 +487,7 @@ function drawTraits() {
 
   const legend = document.createElement("div");
   legend.className = "legend";
-  for (const text of ["0.0 — выражена слабо", "порог 0.4–0.6", "1.0 — выражена сильно"]) {
+  for (const text of ["0.0 — слабо", "порог 0.4–0.6", "1.0 — сильно"]) {
     const span = document.createElement("span");
     span.textContent = text;
     legend.appendChild(span);
