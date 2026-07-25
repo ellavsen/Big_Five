@@ -8,36 +8,6 @@ from core.models import AxisEvidence
 
 from pathlib import Path
 
-import json
-import re
-
-def extract_json(text: str) -> dict:
-    """
-    Безопасно извлекает JSON из ответа LLM.
-    Поддерживает:
-    - чистый JSON
-    - ```json ... ```
-    - ``` ... ```
-    - JSON внутри произвольного текста
-    """
-    if not text or not text.strip():
-        raise ValueError("Empty LLM response, cannot parse JSON")
-
-    cleaned = text.strip()
-
-    # если markdown-блок
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(json)?", "", cleaned).strip()
-        cleaned = re.sub(r"```$", "", cleaned).strip()
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        # до/после JSON может быть текст
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if not match:
-            raise
-        return json.loads(match.group(0))
 
 def load_text(path: str) -> str:
     """

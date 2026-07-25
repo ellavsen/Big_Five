@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from core.models import Axis, AxisSignal, ConversationState, SynthesisResult
@@ -26,6 +28,26 @@ async def test_step_returns_message_and_writes_history():
 
 
 @pytest.mark.asyncio
+async def test_prompt_context_is_valid_json():
+    """
+    Состояние уходило в промпт через f-string, то есть Python-repr:
+    одинарные кавычки, True/False, Axis.EI. Модель должна получать JSON.
+    """
+    orch = _orch(FakeLLM())
+    state = ConversationState()
+    state.add_signals([
+        AxisSignal(axis=Axis.EI, direction="I", text="пример", source="llm"),
+    ])
+    state.add_note("energy:depletion")
+    await orch.step(state, "вчера был тяжёлый день, я устала")
+
+    for prompt in (orch._build_turn_prompt(state), orch._build_synthesis_prompt(state)):
+        payload = prompt.split("\n", 1)[1].strip().splitlines()[-1]
+        ctx = json.loads(payload)  # упадёт на repr-е
+        assert ctx["axis_closed"].keys() == {"EI", "SN", "TF", "JP"}
+
+
+@pytest.mark.asyncio
 async def test_synthesis_saves_structured_dict():
     """
     Регресс: оркестратор пытался распарсить JSON из result.message (связного текста)
@@ -46,7 +68,8 @@ async def test_synthesis_saves_structured_dict():
 
     assert resp.A == "synthesize"
     assert resp.message == "Тёплый связный текст"
-    assert state.synthesis["axis_map"] == {"EI": 0.3}
+    # оси с фиксированными ключами: незаданные приходят нейтральными 0.5
+    assert state.synthesis["axis_map"] == {"EI": 0.3, "SN": 0.5, "TF": 0.5, "JP": 0.5}
     assert state.synthesis["core_vs_role"]["role"] == ["контроль"]
     assert state.dialogue_completed is True
 

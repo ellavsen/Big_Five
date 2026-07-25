@@ -36,5 +36,5 @@ def test_synthesis_result_accepts_axes_confidence_from_prompt():
         "axes_confidence": {"EI": {"confidence": 0.72, "stability": "устойчивая"}},
     })
 
-    assert result.axes_confidence["EI"].confidence == 0.72
-    assert result.axes_confidence["EI"].stability == "устойчивая"
+    assert result.axes_confidence.EI.confidence == 0.72
+    assert result.axes_confidence.EI.stability == "устойчивая"

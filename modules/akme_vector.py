@@ -15,14 +15,18 @@ class AkmeVector:
 
 def _dominant_letter(axis: str, value: float) -> str:
     """
-    value интерпретируем как долю "первой буквы" в паре:
-    EI: доля I
+    value — доля ПЕРВОЙ буквы в названии оси:
+    EI: доля E
     SN: доля S
     TF: доля T
     JP: доля J
+
+    Правило одно для всех четырёх осей. Раньше EI была инвертирована (1.0 = I),
+    и LLM всё равно отвечала по общему правилу — интровертам приходили
+    рекомендации для экстравертов. Полярность продублирована в prompts/synthesizer.md.
     """
     if axis == "EI":
-        first, second = "I", "E"
+        first, second = "E", "I"
     elif axis == "SN":
         first, second = "S", "N"
     elif axis == "TF":

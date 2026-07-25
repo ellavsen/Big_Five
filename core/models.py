@@ -2,7 +2,7 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 class Axis(str, Enum):
     EI = "EI"
@@ -41,8 +41,15 @@ class AxisSignal(BaseModel):
     direction: str  # keep as str to avoid жесткой привязки к AxisDirection в раннем MVP
     text: str = Field(..., description="Короткое основание: что именно в ответе дало сигнал")
     source: AxisSource = "llm"
-    confidence: float = Field(0.6, ge=0.0, le=1.0)
+    # ge/le нельзя: strict-схема structured outputs не поддерживает minimum/maximum.
+    # Диапазон держим валидатором — модель, вышедшую за 0..1, подрезаем, а не роняем ход.
+    confidence: float = 0.6
     direct_example: bool = False
+
+    @field_validator("confidence")
+    @classmethod
+    def _clamp_confidence(cls, v: float) -> float:
+        return max(0.0, min(1.0, v))
 
 
 class AxisEvidence(BaseModel):
@@ -85,30 +92,86 @@ class ChatMessage(BaseModel):
 
 
 class TurnPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     A: Literal["ask", "interpret"]
     message: str
     axis_signals: List[AxisSignal] = []
 
+
+# =========================
+# Форма ответа синтезатора.
+#
+# Все контейнеры здесь — с фиксированными ключами. Это требование strict-схемы
+# structured outputs: открытые словари ({"EI": ...} как additionalProperties)
+# API не принимает. Поэтому оси перечислены полями, а probabilities — списком пар.
+# Значения по умолчанию нужны только fallback-пути в core/llm.py: в самой схеме
+# все поля обязательны, модель обязана вернуть их целиком.
+# =========================
+
 class AxisConfidence(BaseModel):
-    confidence: float  # 0.0–1.0
-    stability: Literal["устойчивая", "пограничная"]
+    model_config = ConfigDict(extra="forbid")
+
+    confidence: float = 0.0  # 0.0–1.0
+    stability: Literal["устойчивая", "пограничная"] = "пограничная"
+
+
+class AxesConfidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    EI: AxisConfidence = Field(default_factory=AxisConfidence)
+    SN: AxisConfidence = Field(default_factory=AxisConfidence)
+    TF: AxisConfidence = Field(default_factory=AxisConfidence)
+    JP: AxisConfidence = Field(default_factory=AxisConfidence)
+
+
+class AxisScores(BaseModel):
+    """Положение по каждой оси, 0..1. 0.5 = нейтрально/неизвестно."""
+    model_config = ConfigDict(extra="forbid")
+
+    EI: float = 0.5
+    SN: float = 0.5
+    TF: float = 0.5
+    JP: float = 0.5
+
+
+class TypeProbability(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    p: float
+
+
+class CoreVsRole(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    core: List[str] = Field(default_factory=list)
+    role: List[str] = Field(default_factory=list)
+
+
+class AkmeVectorOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    core: List[str] = Field(default_factory=list)
+    unload: List[str] = Field(default_factory=list)
+    environment: List[str] = Field(default_factory=list)
+    risk: List[str] = Field(default_factory=list)
+
 
 class SynthesisResult(BaseModel):
     """
     Финальный ответ синтезатора.
     В твоей концепции: валидный JSON и никаких текстов вне JSON.
     """
-    # форма ровно та, что описана в prompts/synthesizer.md:
-    # {"EI": {"confidence": 0.72, "stability": "устойчивая"}}
-    axes_confidence: dict[str, AxisConfidence] | None = None
     model_config = ConfigDict(extra="forbid")
-    
+
     message: str
-    probabilities: Dict[str, float] = Field(default_factory=dict)
-    axis_map: Dict[str, float] = Field(default_factory=dict)
-    core_vs_role: Dict[str, Any] = Field(default_factory=dict)
-    notes: list[str] = []
-    akme_vector: dict | None = None
+    probabilities: List[TypeProbability] = Field(default_factory=list)
+    axes_confidence: AxesConfidence | None = None
+    axis_map: AxisScores = Field(default_factory=AxisScores)
+    core_vs_role: CoreVsRole = Field(default_factory=CoreVsRole)
+    notes: List[str] = Field(default_factory=list)
+    akme_vector: AkmeVectorOut | None = None
 
 class AgentResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")

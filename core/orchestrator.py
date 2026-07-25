@@ -1,6 +1,7 @@
 # core/orchestrator.py
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict
 
@@ -266,9 +267,9 @@ class Orchestrator:
         }
 
         return (
-            "Сформируй следующий ход живого диалога и верни СТРОГО валидный JSON TurnPlan.\n\n"
+            "Сформируй следующий ход живого диалога.\n\n"
             "Контекст состояния (state):\n"
-            f"{ctx}\n"
+            f"{json.dumps(ctx, ensure_ascii=False)}\n"
         )
 
     def _build_synthesis_prompt(self, state: ConversationState) -> str:
@@ -298,7 +299,7 @@ class Orchestrator:
         }
 
         return (
-            "Собери мягкий синтез по модели SynthesisResult. Никаких абсолютов, только вероятности.\n"
+            "Собери мягкий синтез. Никаких абсолютов, только вероятности.\n"
             "Если strict_mode=true — будь особенно осторожен: подчёркивай неопределённости и контекст.\n\n"
-            f"{ctx}\n"
+            f"{json.dumps(ctx, ensure_ascii=False)}\n"
         )

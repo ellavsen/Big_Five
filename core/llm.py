@@ -6,65 +6,61 @@ import os
 from typing import Optional
 from openai import AsyncOpenAI
 from core.models import TurnPlan, SynthesisResult
-from core.utils import extract_json
 
 
 logger = logging.getLogger(__name__)
+
+
+# Сеть: ретраи с экспоненциальным backoff даёт сам SDK, свой цикл не пишем.
+LLM_TIMEOUT_SECONDS = 30.0
+LLM_MAX_RETRIES = 3
+
+# Ход диалога — короткая живая реплика; синтез — длинный связный текст.
+PLAN_MAX_OUTPUT_TOKENS = 800
+PLAN_TEMPERATURE = 0.7
+SYNTHESIS_MAX_OUTPUT_TOKENS = 2000
+SYNTHESIS_TEMPERATURE = 0.4
 
 
 class AsyncLLMClient:
     """
     Минимальный клиент: один вызов LLM на ход для TurnPlan,
     и отдельный вызов для финального синтеза (когда chosen_agent == synthesizer).
+
+    Форму ответа гарантирует structured outputs (`responses.parse` + strict-схема),
+    поэтому ответ не парсится регекспами: либо модель вернула валидный объект,
+    либо мы честно уходим в fallback.
     """
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.client = AsyncOpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        self.client = AsyncOpenAI(
+            api_key=api_key or os.getenv("OPENAI_API_KEY"),
+            timeout=LLM_TIMEOUT_SECONDS,
+            max_retries=LLM_MAX_RETRIES,
+        )
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-    def _normalize_turnplan_payload(self, data: dict) -> dict:
-        """
-        Приводит старые/ошибочные форматы LLM к новому контракту TurnPlan.
-        """
-    # старый формат → новый
-        if "A" not in data:
-            if "suggested_move" in data:
-                data["A"] = data["suggested_move"]
-            elif "reaction" in data:
-                data["A"] = "interpret"
-            else:
-                data["A"] = "ask"
-
-        if "message" not in data:
-            if "reaction" in data:
-                data["message"] = data["reaction"]
-            else:
-                data["message"] = "Продолжим."
-
-        if "axis_signals" not in data:
-            data["axis_signals"] = []
-
-        return data
-
     async def plan_turn(self, system_prompt: str, user_prompt: str) -> TurnPlan:
-        resp = await self.client.responses.create(
-            model=self.model,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-
-        text = (resp.output_text or "").strip()
-        logger.debug("TurnPlan: получен ответ LLM, %d символов", len(text))
         try:
-            raw = extract_json(text)
-            normalized = self._normalize_turnplan_payload(raw)
-            return TurnPlan.model_validate(normalized)
+            resp = await self.client.responses.parse(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                text_format=TurnPlan,
+                max_output_tokens=PLAN_MAX_OUTPUT_TOKENS,
+                temperature=PLAN_TEMPERATURE,
+            )
+            plan = resp.output_parsed
+            if plan is None:
+                raise ValueError(f"модель не вернула объект (status={resp.status})")
+            return plan
 
         except Exception as e:
-        # 🔒 ЖЁСТКИЙ FALLBACK — СИСТЕМА НЕ ПАДАЕТ
-            logger.warning("TurnPlan: не удалось разобрать ответ LLM (%s), уходим в fallback", e)
+            # 🔒 ЖЁСТКИЙ FALLBACK — СИСТЕМА НЕ ПАДАЕТ.
+            # Сюда попадаем на таймауте (после ретраев SDK), отказе модели и обрыве по лимиту.
+            logger.warning("TurnPlan: вызов LLM не дал валидный план (%s), уходим в fallback", e)
             return TurnPlan(
                 A="ask",
                 message="Можем немного замедлиться. Можете привести конкретный пример из недавней ситуации?",
@@ -72,22 +68,25 @@ class AsyncLLMClient:
             )
 
     async def synthesize(self, system_prompt: str, user_prompt: str) -> SynthesisResult:
-        resp = await self.client.responses.create(
-            model=self.model,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-
-        text = (resp.output_text or "").strip()
-        logger.debug("Synthesis: получен ответ LLM, %d символов", len(text))
         try:
-            return SynthesisResult.model_validate(extract_json(text))
+            resp = await self.client.responses.parse(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                text_format=SynthesisResult,
+                max_output_tokens=SYNTHESIS_MAX_OUTPUT_TOKENS,
+                temperature=SYNTHESIS_TEMPERATURE,
+            )
+            result = resp.output_parsed
+            if result is None:
+                raise ValueError(f"модель не вернула объект (status={resp.status})")
+            return result
+
         except Exception as e:
             # синтез не должен падать в лицо пользователю, но и молчать об этом нельзя
-            logger.warning("Synthesis: не удалось разобрать ответ LLM (%s), отдаём текст как есть", e)
+            logger.warning("Synthesis: вызов LLM не дал валидный результат (%s), отдаём мягкую заглушку", e)
             return SynthesisResult(
-                message=text or "Похоже, данных пока мало для связного синтеза.",
-                notes=[],
+                message="Похоже, сейчас не получается собрать связный итог. Попробуем ещё раз чуть позже?",
             )
