@@ -89,6 +89,8 @@ prompts/  turn_planner.md и synthesizer.md загружаются;
 
 ## Статус
 
+Полный план всех этапов (0–4) со статусами — в [docs/ROADMAP.md](docs/ROADMAP.md).
+
 **Этап 0 закрыт** (коммит `4adf863`): `.gitignore` до первого `git add`, `.env.example`,
 `print` с ПДн заменены на `logging`, колонки `users.consent_at` / `consent_version`,
 удалены `exports/` с реальными транскриптами.
