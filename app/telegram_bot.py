@@ -164,7 +164,7 @@ async def _has_consent(tg_id: int) -> bool:
 
 async def _ask_for_consent(update: Update, changed: bool = False) -> None:
     text = (CONSENT_CHANGED_TEXT + "\n\n" + CONSENT_TEXT) if changed else CONSENT_TEXT
-    await update.message.reply_text(text, reply_markup=CONSENT_KB, parse_mode="Markdown")
+    await update.message.reply_text(text, reply_markup=CONSENT_KB)
 
 
 def _previous_profile_from_row(row: tuple[datetime, dict] | None) -> PreviousProfile | None:
@@ -634,11 +634,10 @@ async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def delete_me_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Право на удаление. Шаг 1: предупреждаем, что это безвозвратно."""
     await update.message.reply_text(
-        "Это удалит **всё**: наши сообщения, собранные наблюдения, профиль "
+        "Это удалит ВСЁ: наши сообщения, собранные наблюдения, профиль "
         "и рекомендации. Восстановить будет нельзя.\n\n"
         "Точно удаляем?",
         reply_markup=DELETE_KB,
-        parse_mode="Markdown",
     )
 
 

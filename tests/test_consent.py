@@ -252,3 +252,28 @@ async def test_deletion_works_even_without_consent(monkeypatch):
     await bot.handle_message(_FakeUpdate(DELETE_CONFIRM), _FakeContext())
 
     assert deleted == [USER_ID]
+
+
+# --- разметка ---
+
+def test_user_facing_texts_are_plain():
+    """
+    Регресс: экран согласия отправлялся с parse_mode="Markdown", а в тексте
+    было непарное подчёркивание в «/delete_me» — Telegram отклонял сообщение
+    целиком («Can't find end of Italic entity»). То есть самое первое сообщение
+    новому пользователю не доходило.
+
+    Теперь всё уходит простым текстом, значит любые markdown-символы человек
+    увидит буквально.
+    """
+    from app.consent import CONSENT_TEXT, DECLINE_TEXT, NEED_CONSENT_TEXT
+    from app.formatters import format_mbti
+    from core.models import TraitScores
+    from core.scoring import mbti_from_traits
+
+    mbti = format_mbti(mbti_from_traits(TraitScores(
+        extraversion=0.2, openness=0.2, agreeableness=0.8, conscientiousness=0.8)))
+
+    for text in (CONSENT_TEXT, DECLINE_TEXT, NEED_CONSENT_TEXT, mbti):
+        assert "**" not in text
+        assert "__" not in text

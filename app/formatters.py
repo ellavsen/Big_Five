@@ -18,7 +18,7 @@ def format_mbti(reading: MbtiReading) -> str:
 
     return (
         f"🔤 Похоже на {reading.letters}\n"
-        f"_{reading.disclaimer}_\n\n"
+        f"{reading.disclaimer}\n\n"
     )
 
 
