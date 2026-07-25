@@ -92,8 +92,8 @@ class Signal(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
 
-    axis: Mapped[str] = mapped_column(String(8), nullable=False)        # EI/SN/TF/JP
-    direction: Mapped[str] = mapped_column(String(4), nullable=False)   # E/I, S/N, T/F, J/P
+    trait: Mapped[str] = mapped_column(String(24), nullable=False)      # черта Big Five
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)   # high / low
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
 
@@ -106,7 +106,7 @@ class Signal(Base):
 
     __table_args__ = (
         # защита от дублей “один и тот же сигнал”
-        UniqueConstraint("session_id", "axis", "direction", "text", name="uq_signal_nodup"),
+        UniqueConstraint("session_id", "trait", "direction", "text", name="uq_signal_nodup_trait"),
     )
 
 
@@ -120,7 +120,7 @@ class Synthesis(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True)
 
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    axes_confidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    traits_confidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     raw_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

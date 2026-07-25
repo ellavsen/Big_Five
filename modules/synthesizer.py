@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import Counter
 
-from core.models import ConversationState, Axis
+from core.models import ConversationState, Direction, Trait
 
 
 # =========================
@@ -10,9 +10,9 @@ from core.models import ConversationState, Axis
 # =========================
 
 @dataclass
-class AxisSummary:
-    axis: Axis
-    dominant: str | None
+class TraitSummary:
+    trait: Trait
+    dominant: Direction | None
     status: str          # core | compensated | boundary | unknown
     confidence: str      # low | medium | high
     rationale: str
@@ -22,13 +22,13 @@ class AxisSummary:
 # ВСПОМОГАТЕЛЬНАЯ ЛОГИКА
 # =========================
 
-def _axis_direction_counts(state: ConversationState, axis: Axis) -> Counter:
-    signals = state.evidence.signals_for(axis)
+def _trait_direction_counts(state: ConversationState, trait: Trait) -> Counter:
+    signals = state.evidence.signals_for(trait)
     return Counter(s.direction for s in signals)
 
 
-def _axis_sources(state: ConversationState, axis: Axis) -> set[str]:
-    return {s.source for s in state.evidence.signals_for(axis)}
+def _trait_sources(state: ConversationState, trait: Trait) -> set[str]:
+    return {s.source for s in state.evidence.signals_for(trait)}
 
 
 def _has_compensation(state: ConversationState) -> bool:
@@ -37,57 +37,57 @@ def _has_compensation(state: ConversationState) -> bool:
 
 
 # =========================
-# СИНТЕЗ ОСИ
+# СИНТЕЗ ЧЕРТЫ
 # =========================
 
-def synthesize_axis(state: ConversationState, axis: Axis) -> AxisSummary:
-    signals = state.evidence.signals_for(axis)
+def synthesize_trait(state: ConversationState, trait: Trait) -> TraitSummary:
+    signals = state.evidence.signals_for(trait)
 
     if not signals:
-        return AxisSummary(
-            axis=axis,
+        return TraitSummary(
+            trait=trait,
             dominant=None,
             status="unknown",
             confidence="low",
             rationale="Недостаточно наблюдаемых сигналов."
         )
 
-    counts = _axis_direction_counts(state, axis)
+    counts = _trait_direction_counts(state, trait)
 
     if len(counts) == 1:
         dominant = next(iter(counts))
-        sources = _axis_sources(state, axis)
+        sources = _trait_sources(state, trait)
 
         # Если есть компенсация и источники не энергетические → осторожно
         if _has_compensation(state) and "energy" not in sources:
-            return AxisSummary(
-                axis=axis,
+            return TraitSummary(
+                trait=trait,
                 dominant=dominant,
                 status="compensated",
                 confidence="medium",
                 rationale=(
-                    "Поведение по оси проявляется устойчиво, "
+                    "Черта проявляется устойчиво, "
                     "но есть признаки компенсаторного характера "
                     "и повышенной энергозатраты."
                 )
             )
 
-        return AxisSummary(
-            axis=axis,
+        return TraitSummary(
+            trait=trait,
             dominant=dominant,
             status="core",
             confidence="high" if "energy" in sources else "medium",
-            rationale="Сигналы по оси согласованы в разных контекстах."
+            rationale="Наблюдения по черте согласованы в разных контекстах."
         )
 
     # Противоречивые направления
-    return AxisSummary(
-        axis=axis,
+    return TraitSummary(
+        trait=trait,
         dominant=None,
         status="boundary",
         confidence="low",
         rationale=(
-            "По оси проявляются разнонаправленные сигналы "
+            "По черте проявляются разнонаправленные наблюдения "
             "в разных ситуациях — возможен пограничный профиль."
         )
     )
@@ -103,9 +103,9 @@ def synthesizer_module(state: ConversationState) -> dict:
     НИЧЕГО не меняет в state.
     """
 
-    axis_summaries = {
-        axis.value: synthesize_axis(state, axis)
-        for axis in Axis
+    trait_summaries = {
+        trait.value: synthesize_trait(state, trait)
+        for trait in Trait
     }
 
     # Уровень профиля
@@ -118,14 +118,14 @@ def synthesizer_module(state: ConversationState) -> dict:
 
     return {
         "profile_depth": profile_depth,
-        "axes": {
-            axis: {
-                "dominant": summary.dominant,
+        "traits": {
+            trait: {
+                "dominant": summary.dominant.value if summary.dominant else None,
                 "status": summary.status,
                 "confidence": summary.confidence,
                 "rationale": summary.rationale,
             }
-            for axis, summary in axis_summaries.items()
+            for trait, summary in trait_summaries.items()
         },
         "has_compensation": _has_compensation(state),
         "notes": state.notes,

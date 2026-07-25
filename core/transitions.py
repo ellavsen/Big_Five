@@ -47,7 +47,7 @@ def choose_agent(state: ConversationState):
     if (
         state.validity_level >= STRICT_VL_THRESHOLD
         and state.priority_goal in {"val", "map"}
-        and sum(state.axis_closed.values()) >= 2
+        and sum(state.trait_closed.values()) >= 2
         and not state.synthesis_confirmed
     ):
         return "diagnost", "Можно предложить подвести итог"
@@ -56,7 +56,7 @@ def choose_agent(state: ConversationState):
     if (
         state.priority_goal in {"val", "map"}
         and state.validity_level >= STRICT_VL_THRESHOLD - 1
-        and sum(state.axis_closed.values()) >= 2
+        and sum(state.trait_closed.values()) >= 2
         and not state.interpreter_used
     ):
         return "interpreter", "Мягкая фиксация перед итогом"
@@ -70,8 +70,8 @@ def choose_agent(state: ConversationState):
 
 
 def ready_for_synthesis(state: ConversationState) -> bool:
-    soft_closed = sum(1 for v in state.soft_axis_closed.values() if v)
-    hard_closed = sum(1 for v in state.axis_closed.values() if v)
+    soft_closed = sum(1 for v in state.soft_trait_closed.values() if v)
+    hard_closed = sum(1 for v in state.trait_closed.values() if v)
     return (
         state.validity_level >= 7
         and soft_closed >= 3

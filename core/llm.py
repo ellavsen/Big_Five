@@ -64,7 +64,7 @@ class AsyncLLMClient:
             return TurnPlan(
                 A="ask",
                 message="Можем немного замедлиться. Можете привести конкретный пример из недавней ситуации?",
-                axis_signals=[],
+                trait_signals=[],
             )
 
     async def synthesize(self, system_prompt: str, user_prompt: str) -> SynthesisResult:

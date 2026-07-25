@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from core.models import Axis, AxisSignal, ConversationState, SynthesisResult
+from core.models import ConversationState, Direction, SynthesisResult, Trait, TraitSignal
 from core.orchestrator import Orchestrator
 from tests.fakes import FakeLLM
 
@@ -31,12 +31,12 @@ async def test_step_returns_message_and_writes_history():
 async def test_prompt_context_is_valid_json():
     """
     Состояние уходило в промпт через f-string, то есть Python-repr:
-    одинарные кавычки, True/False, Axis.EI. Модель должна получать JSON.
+    одинарные кавычки, True/False, Trait.EXTRAVERSION. Модель должна получать JSON.
     """
     orch = _orch(FakeLLM())
     state = ConversationState()
     state.add_signals([
-        AxisSignal(axis=Axis.EI, direction="I", text="пример", source="llm"),
+        TraitSignal(trait=Trait.EXTRAVERSION, direction=Direction.LOW, text="пример", source="llm"),
     ])
     state.add_note("energy:depletion")
     await orch.step(state, "вчера был тяжёлый день, я устала")
@@ -44,18 +44,18 @@ async def test_prompt_context_is_valid_json():
     for prompt in (orch._build_turn_prompt(state), orch._build_synthesis_prompt(state)):
         payload = prompt.split("\n", 1)[1].strip().splitlines()[-1]
         ctx = json.loads(payload)  # упадёт на repr-е
-        assert ctx["axis_closed"].keys() == {"EI", "SN", "TF", "JP"}
+        assert set(ctx["trait_closed"]) == {t.value for t in Trait}
 
 
 @pytest.mark.asyncio
 async def test_synthesis_saves_structured_dict():
     """
     Регресс: оркестратор пытался распарсить JSON из result.message (связного текста)
-    и терял axis_map / core_vs_role / akme_vector — /akme получал пустую структуру.
+    и терял trait_scores / core_vs_role / akme_vector — /akme получал пустую структуру.
     """
     synthesis = SynthesisResult(
         message="Тёплый связный текст",
-        axis_map={"EI": 0.3},
+        trait_scores={"extraversion": 0.3},
         core_vs_role={"core": ["анализ"], "role": ["контроль"]},
         akme_vector={"unload": ["избыточный контроль"]},
     )
@@ -68,8 +68,9 @@ async def test_synthesis_saves_structured_dict():
 
     assert resp.A == "synthesize"
     assert resp.message == "Тёплый связный текст"
-    # оси с фиксированными ключами: незаданные приходят нейтральными 0.5
-    assert state.synthesis["axis_map"] == {"EI": 0.3, "SN": 0.5, "TF": 0.5, "JP": 0.5}
+    # черты с фиксированными ключами: незаданные приходят нейтральными 0.5
+    assert state.synthesis["trait_scores"]["extraversion"] == 0.3
+    assert state.synthesis["trait_scores"]["neuroticism"] == 0.5
     assert state.synthesis["core_vs_role"]["role"] == ["контроль"]
     assert state.dialogue_completed is True
 
@@ -81,9 +82,9 @@ async def test_saturated_dialogue_asks_for_confirmation_instead_of_synthesizing(
 
     state = ConversationState()
     state.validity_level = 8
-    for axis, direction in ((Axis.EI, "I"), (Axis.SN, "S"), (Axis.TF, "F"), (Axis.JP, "J")):
-        state.evidence.add(AxisSignal(axis=axis, direction=direction, source="llm", text="раз"))
-        state.evidence.add(AxisSignal(axis=axis, direction=direction, source="llm", text="два"))
+    for trait in Trait:
+        state.evidence.add(TraitSignal(trait=trait, direction=Direction.HIGH, source="llm", text="раз"))
+        state.evidence.add(TraitSignal(trait=trait, direction=Direction.HIGH, source="llm", text="два"))
 
     resp = await orch.step(state, "")
 

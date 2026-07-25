@@ -4,7 +4,7 @@ import uuid
 import pytest
 
 import app.telegram_bot as bot
-from core.models import Axis, AxisSignal, ConversationState
+from core.models import ConversationState, Direction, Trait, TraitSignal
 
 SESSION_ID = uuid.UUID("6f1d3c8e-0000-4000-8000-000000000001")
 USER_ID = 4242
@@ -25,10 +25,11 @@ def _mid_dialogue_state() -> ConversationState:
     s.add_user("вчера сорвался релиз, я до ночи всё переделывала сама")
     s.add_assistant("как ты восстанавливаешься?")
     s.add_signals([
-        AxisSignal(axis=Axis.JP, direction="J", text="доделала сама", source="llm", direct_example=True),
+        TraitSignal(trait=Trait.CONSCIENTIOUSNESS, direction=Direction.HIGH,
+                    text="доделала сама", source="llm", direct_example=True),
     ])
     s.add_note("compensation:control")
-    s.axis_closed[Axis.JP] = True
+    s.trait_closed[Trait.CONSCIENTIOUSNESS] = True
     s.validity_level = 7
     s.goals.sig = 6
     s.synthesis_confirmed = True
@@ -37,8 +38,8 @@ def _mid_dialogue_state() -> ConversationState:
 
 def test_state_survives_json_roundtrip():
     """
-    Снимок уезжает в JSONB и возвращается. Легко ломается на Axis-ключах
-    в axis_closed: JSON знает только строковые ключи.
+    Снимок уезжает в JSONB и возвращается. Легко ломается на Trait-ключах
+    в trait_closed: JSON знает только строковые ключи.
     """
     original = _mid_dialogue_state()
 
@@ -46,7 +47,7 @@ def test_state_survives_json_roundtrip():
     restored = ConversationState.model_validate(json.loads(blob))
 
     assert restored == original
-    assert isinstance(next(iter(restored.axis_closed)), Axis)
+    assert isinstance(next(iter(restored.trait_closed)), Trait)
     # 2612-правило: без этого флага пользователю пришлось бы подтверждать итог заново
     assert restored.synthesis_confirmed is True
 
@@ -59,7 +60,7 @@ def test_snapshot_restores_full_state():
     assert state.session_id == str(SESSION_ID)
     assert state.validity_level == 7
     assert len(state.history) == 2
-    assert state.evidence.signals[0].axis is Axis.JP
+    assert state.evidence.signals[0].trait is Trait.CONSCIENTIOUSNESS
 
 
 def test_empty_snapshot_reuses_session():

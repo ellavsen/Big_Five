@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from core.matching import find_marker, has_episode
-from core.models import ConversationState, Axis, AxisSignal
+from core.models import ConversationState, Direction, Trait, TraitSignal
 
 
 TEAM_ROLE_MARKERS = [
@@ -42,16 +42,17 @@ def team_mirror(state: ConversationState, text: str) -> None:
     # direct_example=True ставим только если это конкретный эпизод
     is_episode = has_episode(text)
 
-    # Слабые сигналы как "второй источник" (module), чтобы оси могли закрываться.
-    # Очень аккуратно: роль в команде часто коррелирует с J (структура/ответственность)
-    # и иногда с F (поддержка/гармония) — но мы даём низкую уверенность.
+    # Слабые сигналы как "второй источник" (module), чтобы черты могли закрываться.
+    # Очень аккуратно: роль в команде часто коррелирует с добросовестностью
+    # (структура/ответственность) и иногда с доброжелательностью (поддержка/гармония) —
+    # но мы даём низкую уверенность.
     signals = []
 
-    # JP: "беру на себя", "организую", "разруливаю" — аккуратный J
+    # "беру на себя", "организую", "разруливаю" — аккуратный сигнал добросовестности
     signals.append(
-        AxisSignal(
-            axis=Axis.JP,
-            direction="J",
+        TraitSignal(
+            trait=Trait.CONSCIENTIOUSNESS,
+            direction=Direction.HIGH,
             confidence=0.25,
             text="паттерн ответственности/организации в командном контексте",
             source="module",
@@ -59,12 +60,12 @@ def team_mirror(state: ConversationState, text: str) -> None:
         )
     )
 
-    # TF: если явно про поддержку/гармонизацию
+    # если явно про поддержку/гармонизацию — доброжелательность
     if find_marker(text, SUPPORT_MARKERS):
         signals.append(
-            AxisSignal(
-                axis=Axis.TF,
-                direction="F",
+            TraitSignal(
+                trait=Trait.AGREEABLENESS,
+                direction=Direction.HIGH,
                 confidence=0.25,
                 text="фокус на поддержке и гармонизации взаимодействия в команде",
                 source="module",

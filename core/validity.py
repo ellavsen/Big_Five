@@ -5,12 +5,12 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 from core.config import (
-    AXIS_CLOSE_SCORE,
-    AXIS_DOMINANCE,
-    AXIS_MIN_SIGNALS,
-    AXIS_SOFT_SCORE,
+    TRAIT_CLOSE_SCORE,
+    TRAIT_DOMINANCE,
+    TRAIT_MIN_SIGNALS,
+    TRAIT_SOFT_SCORE,
 )
-from core.models import ConversationState, Axis, AxisEvidence
+from core.models import ConversationState, Direction, Trait, TraitEvidence
 
 
 # =========================
@@ -24,42 +24,42 @@ class ValidityUpdate:
 
 
 # =========================
-# AXIS CLOSURE LOGIC
+# TRAIT CLOSURE LOGIC
 # =========================
 
 @dataclass
-class AxisWeight:
+class TraitWeight:
     """
-    Сколько накоплено в пользу ведущего направления оси.
+    Сколько накоплено в пользу ведущего направления черты (high или low).
 
-    До Этапа 2C ось закрывалась по флагу `direct_example` у одного сигнала, а модули
-    ставили этот флаг по одному вхождению подстроки — слово «контролирую» закрывало JP.
+    До Этапа 2C черта закрывалась по флагу `direct_example` у одного сигнала, а модули
+    ставили этот флаг по одному вхождению подстроки — слово «контролирую» закрывало ось.
     Теперь решает накопленный вес, число независимых наблюдений и перевес над
-    противоположным полюсом.
+    противоположным направлением.
     """
-    direction: str | None = None
+    direction: Direction | None = None
     score: float = 0.0                       # сумма confidence по ведущему направлению
-    opposing: float = 0.0                    # сумма confidence по всем остальным
+    opposing: float = 0.0                    # сумма confidence по противоположному
     signals: int = 0                         # наблюдений в пользу ведущего
     sources: set[str] = field(default_factory=set)
     has_direct_example: bool = False
 
 
-def weigh_axis(axis: Axis, evidence: AxisEvidence) -> AxisWeight:
-    signals = evidence.for_axis(axis)
+def weigh_trait(trait: Trait, evidence: TraitEvidence) -> TraitWeight:
+    signals = evidence.signals_for(trait)
     if not signals:
-        return AxisWeight()
+        return TraitWeight()
 
-    by_direction: Dict[str, float] = defaultdict(float)
+    by_direction: Dict[Direction, float] = defaultdict(float)
     for s in signals:
         by_direction[s.direction] += s.confidence
 
     direction = max(by_direction, key=lambda d: by_direction[d])
     leading = [s for s in signals if s.direction == direction]
 
-    # Округление обязательно: 0.6 + 0.3 в float даёт 0.8999999999999999, и ось
+    # Округление обязательно: 0.6 + 0.3 в float даёт 0.8999999999999999, и черта
     # не закрывалась бы ровно на пороговом наборе сигналов.
-    return AxisWeight(
+    return TraitWeight(
         direction=direction,
         score=round(by_direction[direction], 6),
         opposing=round(sum(v for d, v in by_direction.items() if d != direction), 6),
@@ -69,39 +69,39 @@ def weigh_axis(axis: Axis, evidence: AxisEvidence) -> AxisWeight:
     )
 
 
-def _dominates(w: AxisWeight) -> bool:
-    """Ведущее направление должно заметно перевешивать: иначе это не ось, а противоречие."""
-    return w.opposing == 0.0 or w.score >= w.opposing * AXIS_DOMINANCE
+def _dominates(w: TraitWeight) -> bool:
+    """Ведущее направление должно заметно перевешивать: иначе это противоречие, а не черта."""
+    return w.opposing == 0.0 or w.score >= w.opposing * TRAIT_DOMINANCE
 
 
-def axis_is_closed(axis: Axis, evidence: AxisEvidence) -> bool:
+def trait_is_closed(trait: Trait, evidence: TraitEvidence) -> bool:
     """
     Жёсткое закрытие: накоплен вес, наблюдений хватает, они не из одного источника
-    (либо есть настоящий эпизод), и противоположный полюс не спорит.
+    (либо есть настоящий эпизод), и противоположное направление не спорит.
     """
-    w = weigh_axis(axis, evidence)
+    w = weigh_trait(trait, evidence)
 
     return (
-        w.score >= AXIS_CLOSE_SCORE
-        and w.signals >= AXIS_MIN_SIGNALS
+        w.score >= TRAIT_CLOSE_SCORE
+        and w.signals >= TRAIT_MIN_SIGNALS
         and (len(w.sources) >= 2 or w.has_direct_example)
         and _dominates(w)
     )
 
 
-def soft_axis_closed(axis: Axis, evidence: AxisEvidence) -> bool:
+def soft_trait_closed(trait: Trait, evidence: TraitEvidence) -> bool:
     """
     Мягкое закрытие: накопление идёт, но подтверждений ещё мало.
 
-    Условия — подмножество жёстких, поэтому жёстко закрытая ось всегда закрыта и мягко.
-    Раньше было наоборот: `soft` требовал два сигнала, а `axis_is_closed` довольствовался
+    Условия — подмножество жёстких, поэтому жёстко закрытая черта всегда закрыта и мягко.
+    Раньше было наоборот: `soft` требовал два сигнала, а `trait_is_closed` довольствовался
     одним с `direct_example`, из-за чего «мягкое» условие оказывалось строже «жёсткого».
     """
-    w = weigh_axis(axis, evidence)
+    w = weigh_trait(trait, evidence)
 
     return (
-        w.score >= AXIS_SOFT_SCORE
-        and w.signals >= AXIS_MIN_SIGNALS
+        w.score >= TRAIT_SOFT_SCORE
+        and w.signals >= TRAIT_MIN_SIGNALS
         and _dominates(w)
     )
 
@@ -165,17 +165,17 @@ def update_validity_from_text(text: str) -> ValidityUpdate:
 # SYNTHESIS READINESS (2612)
 # =========================
 
-def _axes_with_any_signal(state: ConversationState) -> int:
+def _traits_with_any_signal(state: ConversationState) -> int:
     return sum(
-        1 for axis in Axis
-        if len(state.evidence.signals_for(axis)) >= 1
+        1 for trait in Trait
+        if len(state.evidence.signals_for(trait)) >= 1
     )
 
 
-def _axes_with_multiple_signals(state: ConversationState) -> int:
+def _traits_with_multiple_signals(state: ConversationState) -> int:
     return sum(
-        1 for axis in Axis
-        if len(state.evidence.signals_for(axis)) >= 2
+        1 for trait in Trait
+        if len(state.evidence.signals_for(trait)) >= 2
     )
 
 
@@ -184,19 +184,20 @@ def is_profile_sufficient(state: ConversationState) -> bool:
     КРИТЕРИЙ 2612:
 
     Синтез возможен, если:
-    - по всем 4 осям есть сигналы
-    - минимум по 2 осям есть повторяемость
+    - по каждой из черт есть хотя бы одно наблюдение
+    - минимум по двум чертам есть повторяемость
     - валидность говорит «материала достаточно»
 
     ❗ Это НЕ критерий истинности.
     Это критерий ВЫРАЗИМОСТИ КАРТЫ.
+
+    Черт стало пять вместо четырёх (Этап 3B), поэтому критерий требует чуть больше
+    материала. Это сознательно: без наблюдений про энергию и устойчивость карта
+    энергии — а это и есть продукт — не собирается.
     """
 
-    axes_any = _axes_with_any_signal(state)
-    axes_multi = _axes_with_multiple_signals(state)
-
     return (
-        axes_any == 4
-        and axes_multi >= 2
+        _traits_with_any_signal(state) == len(Trait)
+        and _traits_with_multiple_signals(state) >= 2
         and state.validity_level >= 7
     )

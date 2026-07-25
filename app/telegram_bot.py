@@ -19,7 +19,8 @@ from app.formatters import format_akme
 from modules.akme_vector import akme_vector_from_synthesis
 
 from core.orchestrator import Orchestrator
-from core.models import ConversationState
+from core.models import ConversationState, TraitScores
+from core.scoring import mbti_from_traits
 from core.llm import AsyncLLMClient
 from core.utils import load_text
 
@@ -159,8 +160,8 @@ def _signals_payload_from_state(state: ConversationState) -> list[dict]:
     for s in getattr(state.evidence, "signals", []):
         payload.append(
             {
-                "axis": getattr(s.axis, "value", s.axis),  # Axis enum -> str
-                "direction": s.direction,
+                "trait": s.trait.value,
+                "direction": s.direction.value,
                 "confidence": float(s.confidence),
                 "text": s.text,
                 "direct_example": bool(s.direct_example),
@@ -220,9 +221,9 @@ async def _persist_synthesis_and_finish(state: ConversationState, synthesis_text
     sid = uuid.UUID(state.session_id)
 
     raw_json = state.synthesis if isinstance(state.synthesis, dict) else None
-    axes_conf = None
+    traits_conf = None
     if isinstance(raw_json, dict):
-        axes_conf = raw_json.get("axes_confidence")
+        traits_conf = raw_json.get("traits_confidence")
 
     SessionMaker = get_sessionmaker()
     async with SessionMaker() as db:
@@ -230,7 +231,7 @@ async def _persist_synthesis_and_finish(state: ConversationState, synthesis_text
         await repo.save_synthesis(
             sid,
             text=synthesis_text,
-            axes_confidence=axes_conf,
+            traits_confidence=traits_conf,
             raw_json=raw_json,
         )
         await repo.finish_session(
@@ -508,7 +509,10 @@ async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     akme = akme_vector_from_synthesis(state.synthesis)
-    text = format_akme(akme)
+    # четыре буквы считаем из черт, а не берём probabilities из ответа модели:
+    # ядро — Big Five, и второй источник типа спорил бы с ним
+    scores = TraitScores.model_validate(state.synthesis.get("trait_scores") or {})
+    text = format_akme(akme, mbti=mbti_from_traits(scores))
 
     await _persist_akme(state, recommendations_text=text, vector_json=asdict(akme))
 

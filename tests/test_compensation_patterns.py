@@ -1,4 +1,4 @@
-from core.models import Axis, ConversationState
+from core.models import ConversationState, Direction, Trait
 from modules.compensation_patterns import compensation_patterns
 
 
@@ -12,9 +12,9 @@ def test_compensation_adds_note_and_signal():
 
     assert "compensation:control" in s.notes
 
-    jp = s.evidence.signals_for(Axis.JP)
-    assert len(jp) == 1
-    assert jp[0].direction == "J"
+    signals = s.evidence.signals_for(Trait.CONSCIENTIOUSNESS)
+    assert len(signals) == 1
+    assert signals[0].direction is Direction.HIGH
 
 
 def test_no_compensation_without_markers():

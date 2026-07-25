@@ -25,16 +25,16 @@ def test_agent_response_forbid_extra():
         )
 
 
-def test_synthesis_result_accepts_axes_confidence_from_prompt():
+def test_synthesis_result_accepts_traits_confidence_from_prompt():
     """
-    Регресс: prompts/synthesizer.md велит вернуть axes_confidence как объекты
+    Регресс: prompts/synthesizer.md велит вернуть traits_confidence как объекты
     {confidence, stability}, а модель ждала число — синтез падал ValidationError
     ровно после нажатия «✅ Подвести итог».
     """
     result = SynthesisResult.model_validate({
         "message": "тёплый текст",
-        "axes_confidence": {"EI": {"confidence": 0.72, "stability": "устойчивая"}},
+        "traits_confidence": {"extraversion": {"confidence": 0.72, "stability": "устойчивая"}},
     })
 
-    assert result.axes_confidence.EI.confidence == 0.72
-    assert result.axes_confidence.EI.stability == "устойчивая"
+    assert result.traits_confidence.extraversion.confidence == 0.72
+    assert result.traits_confidence.extraversion.stability == "устойчивая"

@@ -87,7 +87,7 @@ async def test_plan_turn_falls_back_on_timeout():
     assert isinstance(plan, TurnPlan)
     assert plan.A == "ask"
     assert plan.message
-    assert plan.axis_signals == []
+    assert plan.trait_signals == []
 
 
 @pytest.mark.asyncio

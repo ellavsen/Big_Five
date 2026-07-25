@@ -4,43 +4,42 @@ from enum import Enum
 from typing import Any, Dict, List, Literal
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
-class Axis(str, Enum):
-    EI = "EI"
-    SN = "SN"
-    TF = "TF"
-    JP = "JP"
-
-
-class AxisDirection(str, Enum):
-    # EI
-    E = "E"
-    I = "I"  # noqa: E741 — это полюс оси MBTI, а не переменная
-    # SN
-    S = "S"
-    N = "N"
-    # TF
-    T = "T"
-    F = "F"
-    # JP
-    J = "J"
-    P = "P"
-
-
-AxisSource = Literal["llm", "user", "energy", "module", "direct_example"]
-
-
-class AxisSignal(BaseModel):
+class Trait(str, Enum):
     """
-    Один наблюдаемый сигнал по одной оси.
-    direction — конкретная сторона оси (например, I или E).
-    confidence — насколько уверенно этот сигнал поддерживает direction (0..1).
+    Ядро оценки — Big Five (OCEAN). Не биполярные оси MBTI, а измеримые черты:
+    у каждой есть выраженность, а не «сторона».
+
+    Neuroticism не имеет соответствия в MBTI, и именно он отвечает за реактивность
+    на стресс, истощение и восстановление — то есть за заявленное ядро продукта.
+    Пока черт было четыре, наблюдения про энергию класть было некуда.
+    """
+    OPENNESS = "openness"
+    CONSCIENTIOUSNESS = "conscientiousness"
+    EXTRAVERSION = "extraversion"
+    AGREEABLENESS = "agreeableness"
+    NEUROTICISM = "neuroticism"
+
+
+class Direction(str, Enum):
+    """Черта выражена сильно или слабо. Заменила полюса MBTI (E/I, S/N, T/F, J/P)."""
+    HIGH = "high"
+    LOW = "low"
+
+
+SignalSource = Literal["llm", "user", "energy", "module", "direct_example"]
+
+
+class TraitSignal(BaseModel):
+    """
+    Одно наблюдение по одной черте.
+    confidence — насколько уверенно оно поддерживает direction (0..1).
     """
     model_config = ConfigDict(extra="forbid")
 
-    axis: Axis
-    direction: str  # keep as str to avoid жесткой привязки к AxisDirection в раннем MVP
+    trait: Trait
+    direction: Direction
     text: str = Field(..., description="Короткое основание: что именно в ответе дало сигнал")
-    source: AxisSource = "llm"
+    source: SignalSource = "llm"
     # ge/le нельзя: strict-схема structured outputs не поддерживает minimum/maximum.
     # Диапазон держим валидатором — модель, вышедшую за 0..1, подрезаем, а не роняем ход.
     confidence: float = 0.6
@@ -52,23 +51,19 @@ class AxisSignal(BaseModel):
         return max(0.0, min(1.0, v))
 
 
-class AxisEvidence(BaseModel):
+class TraitEvidence(BaseModel):
     """
-    Склад всех сигналов по всем осям.
+    Склад всех наблюдений по всем чертам.
     """
     model_config = ConfigDict(extra="forbid")
 
-    signals: List[AxisSignal] = Field(default_factory=list)
+    signals: List[TraitSignal] = Field(default_factory=list)
 
-    def add(self, sig: AxisSignal) -> None:
+    def add(self, sig: TraitSignal) -> None:
         self.signals.append(sig)
 
-    def signals_for(self, axis: Axis) -> List[AxisSignal]:
-        return [s for s in self.signals if s.axis == axis]
-
-    # Алиас ради читаемости/совместимости со старым кодом
-    def for_axis(self, axis: Axis) -> List[AxisSignal]:
-        return self.signals_for(axis)
+    def signals_for(self, trait: Trait) -> List[TraitSignal]:
+        return [s for s in self.signals if s.trait == trait]
 
 
 class Goals(BaseModel):
@@ -96,43 +91,51 @@ class TurnPlan(BaseModel):
 
     A: Literal["ask", "interpret"]
     message: str
-    axis_signals: List[AxisSignal] = []
+    trait_signals: List[TraitSignal] = []
 
 
 # =========================
 # Форма ответа синтезатора.
 #
 # Все контейнеры здесь — с фиксированными ключами. Это требование strict-схемы
-# structured outputs: открытые словари ({"EI": ...} как additionalProperties)
-# API не принимает. Поэтому оси перечислены полями, а probabilities — списком пар.
+# structured outputs: открытые словари (черта → значение как additionalProperties)
+# API не принимает. Поэтому черты перечислены полями, а probabilities — списком пар.
 # Значения по умолчанию нужны только fallback-пути в core/llm.py: в самой схеме
 # все поля обязательны, модель обязана вернуть их целиком.
 # =========================
 
-class AxisConfidence(BaseModel):
+class TraitConfidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     confidence: float = 0.0  # 0.0–1.0
     stability: Literal["устойчивая", "пограничная"] = "пограничная"
 
 
-class AxesConfidence(BaseModel):
+class TraitsConfidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    EI: AxisConfidence = Field(default_factory=AxisConfidence)
-    SN: AxisConfidence = Field(default_factory=AxisConfidence)
-    TF: AxisConfidence = Field(default_factory=AxisConfidence)
-    JP: AxisConfidence = Field(default_factory=AxisConfidence)
+    openness: TraitConfidence = Field(default_factory=TraitConfidence)
+    conscientiousness: TraitConfidence = Field(default_factory=TraitConfidence)
+    extraversion: TraitConfidence = Field(default_factory=TraitConfidence)
+    agreeableness: TraitConfidence = Field(default_factory=TraitConfidence)
+    neuroticism: TraitConfidence = Field(default_factory=TraitConfidence)
 
 
-class AxisScores(BaseModel):
-    """Положение по каждой оси, 0..1. 0.5 = нейтрально/неизвестно."""
+class TraitScores(BaseModel):
+    """
+    Выраженность каждой черты, 0..1. 1.0 = черта выражена сильно, 0.0 = слабо,
+    0.5 = нейтрально либо данных не хватает.
+
+    Внимание к `neuroticism`: высокое значение = высокая реактивность на стресс,
+    низкое = эмоциональная устойчивость. Это не «плохо/хорошо», а профиль нагрузки.
+    """
     model_config = ConfigDict(extra="forbid")
 
-    EI: float = 0.5
-    SN: float = 0.5
-    TF: float = 0.5
-    JP: float = 0.5
+    openness: float = 0.5
+    conscientiousness: float = 0.5
+    extraversion: float = 0.5
+    agreeableness: float = 0.5
+    neuroticism: float = 0.5
 
 
 class TypeProbability(BaseModel):
@@ -166,9 +169,10 @@ class SynthesisResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str
+    # MBTI-типы: популярная обёртка, выводимая из черт. Не ядро оценки.
     probabilities: List[TypeProbability] = Field(default_factory=list)
-    axes_confidence: AxesConfidence | None = None
-    axis_map: AxisScores = Field(default_factory=AxisScores)
+    traits_confidence: TraitsConfidence | None = None
+    trait_scores: TraitScores = Field(default_factory=TraitScores)
     core_vs_role: CoreVsRole = Field(default_factory=CoreVsRole)
     notes: List[str] = Field(default_factory=list)
     akme_vector: AkmeVectorOut | None = None
@@ -190,15 +194,15 @@ class ConversationState(BaseModel):
     telegram_id: int | None = None
     last_saved_signals_count: int = 0
     history: List[ChatMessage] = Field(default_factory=list)
-    evidence: AxisEvidence = Field(default_factory=AxisEvidence)
+    evidence: TraitEvidence = Field(default_factory=TraitEvidence)
 
     validity_level: int = 4
     goals: Goals = Field(default_factory=Goals)
     notes: List[str] = Field(default_factory=list)
 
-    # какие оси закрыты по evidence_logic
-    axis_closed: Dict[Axis, bool] = Field(default_factory=lambda: {a: False for a in Axis})
-    soft_axis_closed: Dict[Axis, bool] = Field(default_factory=lambda: {a: False for a in Axis})
+    # какие черты набрали достаточно наблюдений
+    trait_closed: Dict[Trait, bool] = Field(default_factory=lambda: {t: False for t in Trait})
+    soft_trait_closed: Dict[Trait, bool] = Field(default_factory=lambda: {t: False for t in Trait})
     # метаданные управления диалогом
     priority_goal: Literal["ctx", "sig", "val", "map", "sum"] = "ctx"
     chosen_agent: Literal["diagnost", "interpreter", "synthesizer"] = "diagnost"
@@ -223,18 +227,18 @@ class ConversationState(BaseModel):
         if text:
             self.notes.append(text)
 
-    def add_signals(self, signals: List[AxisSignal]) -> None:
+    def add_signals(self, signals: List[TraitSignal]) -> None:
         """
-        Складывает сигналы, отсекая повторы по (axis, direction, text).
+        Складывает наблюдения, отсекая повторы по (trait, direction, text).
 
         LLM охотно переотправляет наблюдение, которое уже лежит в evidence, дословно.
-        Без этого фильтра дубль накручивал бы вес закрытия оси на пустом месте.
+        Без этого фильтра дубль накручивал бы вес закрытия черты на пустом месте.
         То же ограничение стоит в БД — uq_signal_nodup.
         """
-        seen = {(s.axis, s.direction, s.text) for s in self.evidence.signals}
+        seen = {(s.trait, s.direction, s.text) for s in self.evidence.signals}
 
         for s in signals:
-            key = (s.axis, s.direction, s.text)
+            key = (s.trait, s.direction, s.text)
             if key in seen:
                 continue
             seen.add(key)

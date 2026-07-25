@@ -58,7 +58,7 @@ async def export_session_full(db: AsyncSession, session_id: uuid.UUID, out_dir: 
     signals_df = pd.DataFrame([{
         "id": x.id,
         "session_id": str(x.session_id),
-        "axis": x.axis,
+        "trait": x.trait,
         "direction": x.direction,
         "confidence": getattr(x, "confidence", None),
         "text": x.text,
@@ -86,7 +86,7 @@ async def export_session_full(db: AsyncSession, session_id: uuid.UUID, out_dir: 
     synthesis_df = pd.DataFrame([{
         "session_id": str(session_id),
         "text": syn.text if syn else None,
-        "axes_confidence": syn.axes_confidence if syn else None,
+        "traits_confidence": syn.traits_confidence if syn else None,
         "raw_json": syn.raw_json if syn else None,
         "created_at": syn.created_at if syn else None,
     }])

@@ -5,17 +5,18 @@ import json
 import logging
 from typing import Any, Dict
 
-from core.models import ConversationState, AgentResponse, Axis
+from core.models import ConversationState, AgentResponse, Trait
 from core.llm import AsyncLLMClient
 from core.validity import (
     update_validity_from_text,
-    axis_is_closed,
-    soft_axis_closed,
+    trait_is_closed,
+    soft_trait_closed,
     is_profile_sufficient,
+    weigh_trait,
 )
 from core.transitions import choose_agent, choose_priority_goal
 from core.config import STRICT_MODE, STRICT_VL_THRESHOLD
-from core.utils import serialize_axis_evidence
+from core.utils import serialize_trait_evidence
 from modules.registry import MODULES
 from modules.synthesizer import synthesizer_module
 
@@ -23,11 +24,11 @@ from modules.synthesizer import synthesizer_module
 logger = logging.getLogger(__name__)
 
 
-def _update_axis_closed(state: ConversationState) -> None:
-    """Пересчитывает закрытие осей по собранным сигналам."""
-    for axis in Axis:
-        state.axis_closed[axis] = axis_is_closed(axis, state.evidence)
-        state.soft_axis_closed[axis] = soft_axis_closed(axis, state.evidence)
+def _update_trait_closed(state: ConversationState) -> None:
+    """Пересчитывает закрытие черт по собранным наблюдениям."""
+    for trait in Trait:
+        state.trait_closed[trait] = trait_is_closed(trait, state.evidence)
+        state.soft_trait_closed[trait] = soft_trait_closed(trait, state.evidence)
 
 
 def _update_goals_mvp(state: ConversationState) -> None:
@@ -38,7 +39,7 @@ def _update_goals_mvp(state: ConversationState) -> None:
 
     notes_text = " ".join(state.notes).lower()
     sig_count = len(state.evidence.signals)
-    closed_axes = sum(1 for a in Axis if state.axis_closed.get(a))
+    closed_traits = sum(1 for t in Trait if state.trait_closed.get(t))
 
     # --- ctx ---
     ctx_keys = [
@@ -58,11 +59,11 @@ def _update_goals_mvp(state: ConversationState) -> None:
         state.goals.sig = max(state.goals.sig, 7)
 
     # --- val ---
-    if closed_axes >= 1:
+    if closed_traits >= 1:
         state.goals.val = max(state.goals.val, 5)
-    if closed_axes >= 2:
+    if closed_traits >= 2:
         state.goals.val = max(state.goals.val, 6)
-    if closed_axes >= 3:
+    if closed_traits >= 3:
         state.goals.val = max(state.goals.val, 7)
 
     # --- map ---
@@ -80,11 +81,11 @@ def _update_goals_mvp(state: ConversationState) -> None:
 
     # --- sum ---
     # sum — индикатор “созрело ли”, но по 2612 он НЕ должен блокировать синтез.
-    if state.validity_level >= 6 and closed_axes >= 2:
+    if state.validity_level >= 6 and closed_traits >= 2:
         state.goals.sum = max(state.goals.sum, 3)
-    if state.validity_level >= STRICT_VL_THRESHOLD and closed_axes >= 3:
+    if state.validity_level >= STRICT_VL_THRESHOLD and closed_traits >= 3:
         state.goals.sum = max(state.goals.sum, 4)
-    if state.validity_level >= STRICT_VL_THRESHOLD + 1 and closed_axes >= 3:
+    if state.validity_level >= STRICT_VL_THRESHOLD + 1 and closed_traits >= 3:
         state.goals.sum = max(state.goals.sum, 5)
 
 
@@ -146,8 +147,8 @@ class Orchestrator:
         state.clamp_vl(vu.delta)
         state.add_note(f"validity:{vu.note}")
 
-        # 4) recompute axis closed + goals
-        _update_axis_closed(state)
+        # 4) recompute trait closed + goals
+        _update_trait_closed(state)
         _update_goals_mvp(state)
 
         # 4.5) readiness (2612): карта стала выразимой
@@ -186,7 +187,7 @@ class Orchestrator:
 
             state.add_assistant(result.message)
             # result.message — связный текст для человека, а вся структура уже разобрана
-            # в SynthesisResult: axis_map / core_vs_role / akme_vector нужны /akme
+            # в SynthesisResult: trait_scores / core_vs_role / akme_vector нужны /akme
             state.synthesis = result.model_dump()
 
             state.dialogue_completed = True
@@ -222,9 +223,9 @@ class Orchestrator:
             state.interpreter_used = True
 
         # применяем сигналы LLM
-        if plan.axis_signals:
-            state.add_signals(plan.axis_signals)
-            _update_axis_closed(state)
+        if plan.trait_signals:
+            state.add_signals(plan.trait_signals)
+            _update_trait_closed(state)
 
         # сообщение
         state.add_assistant(plan.message)
@@ -251,15 +252,15 @@ class Orchestrator:
 
     def _build_turn_prompt(self, state: ConversationState) -> str:
         history_for_llm = [{"role": m.role, "content": m.content} for m in state.history[-12:]]
-        ev = serialize_axis_evidence(state.evidence)
+        ev = serialize_trait_evidence(state.evidence)
         g = state.goals
 
         ctx = {
             "validity_level": state.validity_level,
             "goals": {"ctx": g.ctx, "sig": g.sig, "val": g.val, "map": g.map, "sum": g.sum},
             "priority_goal": state.priority_goal,
-            "axis_closed": {k.value: v for k, v in state.axis_closed.items()},
-            "soft_axis_closed": {k.value: v for k, v in state.soft_axis_closed.items()},
+            "trait_closed": {k.value: v for k, v in state.trait_closed.items()},
+            "soft_trait_closed": {k.value: v for k, v in state.soft_trait_closed.items()},
             "dialogue_saturated": state.dialogue_saturated,
             "notes_tail": state.notes[-8:],
             "evidence_compact": ev,
@@ -273,7 +274,7 @@ class Orchestrator:
         )
 
     def _build_synthesis_prompt(self, state: ConversationState) -> str:
-        ev = serialize_axis_evidence(state.evidence)
+        ev = serialize_trait_evidence(state.evidence)
         g = state.goals
 
         # STRICT_MODE = только “тон осторожности”, НЕ запрет
@@ -284,13 +285,29 @@ class Orchestrator:
         det_profile = synthesizer_module(state)
         det_profile.pop("notes", None)  # notes передаются отдельным полем ниже
 
+        # Посчитанный вес по каждой черте. Раньше модель просили «оцени уверенность
+        # сама», и она ставила всем чертам одно и то же число. Теперь у неё под рукой
+        # готовая арифметика: сколько накоплено, сколько спорит, сколько источников.
+        weights = {}
+        for trait in Trait:
+            w = weigh_trait(trait, state.evidence)
+            weights[trait.value] = {
+                "direction": w.direction.value if w.direction else None,
+                "score": w.score,
+                "opposing": w.opposing,
+                "observations": w.signals,
+                "sources": sorted(w.sources),
+                "has_direct_example": w.has_direct_example,
+            }
+
         ctx = {
             "strict_mode": strict_hint,
             "deterministic_profile": det_profile,
+            "trait_weights": weights,
             "validity_level": state.validity_level,
             "goals": {"ctx": g.ctx, "sig": g.sig, "val": g.val, "map": g.map, "sum": g.sum},
-            "axis_closed": {k.value: v for k, v in state.axis_closed.items()},
-            "soft_axis_closed": {k.value: v for k, v in state.soft_axis_closed.items()},
+            "trait_closed": {k.value: v for k, v in state.trait_closed.items()},
+            "soft_trait_closed": {k.value: v for k, v in state.soft_trait_closed.items()},
             "notes": state.notes[-20:],
             "evidence_compact": ev,
             "map_completed": state.map_completed,

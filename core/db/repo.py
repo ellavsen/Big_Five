@@ -101,7 +101,7 @@ class Repo:
     async def add_signals(self, session_id: uuid.UUID, signals: list[dict]) -> None:
         """
         signals: list of dicts with keys:
-        axis, direction, confidence, text, direct_example
+        trait, direction, confidence, text, direct_example
         """
         if not signals:
             return
@@ -109,7 +109,7 @@ class Repo:
         for s in signals:
             obj = Signal(
                 session_id=session_id,
-                axis=str(s["axis"]),
+                trait=str(s["trait"]),
                 direction=str(s["direction"]),
                 confidence=float(s.get("confidence", 0.0)),
                 text=str(s.get("text", "")),
@@ -123,17 +123,17 @@ class Repo:
             # на дублях по uq_signal_nodup просто откатываем и продолжаем
             await self.db.rollback()
 
-    async def save_synthesis(self, session_id: uuid.UUID, text: str, axes_confidence: dict | None, raw_json: dict | None) -> None:
+    async def save_synthesis(self, session_id: uuid.UUID, text: str, traits_confidence: dict | None, raw_json: dict | None) -> None:
         stmt = insert(Synthesis).values(
             session_id=session_id,
             text=text,
-            axes_confidence=axes_confidence,
+            traits_confidence=traits_confidence,
             raw_json=raw_json,
         ).on_conflict_do_update(
             index_elements=[Synthesis.session_id],
             set_={
                 "text": text,
-                "axes_confidence": axes_confidence,
+                "traits_confidence": traits_confidence,
                 "raw_json": raw_json,
             },
         )
