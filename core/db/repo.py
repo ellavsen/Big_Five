@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -93,6 +94,24 @@ class Repo:
             select(DbSession.id, DbSession.state_json)
             .where(DbSession.user_id == telegram_id, DbSession.status == "active")
             .order_by(DbSession.started_at.desc())
+            .limit(1)
+        )
+        row = res.first()
+        return (row[0], row[1]) if row else None
+
+    async def get_last_profile(self, telegram_id: int) -> tuple[datetime, dict] | None:
+        """
+        Последний завершённый профиль пользователя: когда и что вышло.
+
+        Нужен, чтобы новый разговор начинался не с чистого листа. Берём `raw_json`
+        (это `SynthesisResult.model_dump()`), а не текст итога — из него нужны
+        только черты и заметки.
+        """
+        res = await self.db.execute(
+            select(Synthesis.created_at, Synthesis.raw_json)
+            .join(DbSession, DbSession.id == Synthesis.session_id)
+            .where(DbSession.user_id == telegram_id, Synthesis.raw_json.isnot(None))
+            .order_by(Synthesis.created_at.desc())
             .limit(1)
         )
         row = res.first()

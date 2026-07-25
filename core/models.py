@@ -177,6 +177,22 @@ class SynthesisResult(BaseModel):
     notes: List[str] = Field(default_factory=list)
     akme_vector: AkmeVectorOut | None = None
 
+class PreviousProfile(BaseModel):
+    """
+    Профиль из прошлого разговора этого же человека.
+
+    Кладётся в состояние при создании новой сессии и уходит в промпт, чтобы профиль
+    рос во времени, а не собирался каждый раз с нуля. Намеренно компактный: берём
+    черты и заметки, но не весь прошлый текст — он длинный и уводит модель
+    в пересказ вместо наблюдения.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    finished_at: str                     # ISO-дата прошлого итога
+    trait_scores: TraitScores = Field(default_factory=TraitScores)
+    notes: List[str] = Field(default_factory=list)
+
+
 class AgentResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -215,6 +231,8 @@ class ConversationState(BaseModel):
     last_transcript: str | None = None
     awaiting_transcript_fix: bool = False
     synthesis: dict | None = None
+    # профиль из прошлого разговора, если он был
+    previous_profile: PreviousProfile | None = None
     # NEW: подтверждён ли итог пользователем
     synthesis_confirmed: bool = False
     def add_user(self, text: str) -> None:

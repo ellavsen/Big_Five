@@ -262,6 +262,9 @@ class Orchestrator:
             "trait_closed": {k.value: v for k, v in state.trait_closed.items()},
             "soft_trait_closed": {k.value: v for k, v in state.soft_trait_closed.items()},
             "dialogue_saturated": state.dialogue_saturated,
+            "previous_profile": (
+                state.previous_profile.model_dump(mode="json") if state.previous_profile else None
+            ),
             "notes_tail": state.notes[-8:],
             "evidence_compact": ev,
             "history": history_for_llm,
@@ -308,6 +311,9 @@ class Orchestrator:
             "goals": {"ctx": g.ctx, "sig": g.sig, "val": g.val, "map": g.map, "sum": g.sum},
             "trait_closed": {k.value: v for k, v in state.trait_closed.items()},
             "soft_trait_closed": {k.value: v for k, v in state.soft_trait_closed.items()},
+            "previous_profile": (
+                state.previous_profile.model_dump(mode="json") if state.previous_profile else None
+            ),
             "notes": state.notes[-20:],
             "evidence_compact": ev,
             "map_completed": state.map_completed,

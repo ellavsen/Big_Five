@@ -4,6 +4,7 @@ import logging
 import tempfile
 import time
 from dataclasses import asdict
+from datetime import datetime
 from pydantic import ValidationError
 from telegram import Update
 from telegram.ext import (
@@ -19,7 +20,7 @@ from app.formatters import format_akme
 from modules.akme_vector import akme_vector_from_synthesis
 
 from core.orchestrator import Orchestrator
-from core.models import ConversationState, TraitScores
+from core.models import ConversationState, PreviousProfile, TraitScores
 from core.scoring import mbti_from_traits
 from core.llm import AsyncLLMClient
 from core.utils import load_text
@@ -130,6 +131,31 @@ async def _save_message_to_db(state: ConversationState, role: str, text: str, so
         repo = Repo(db)
         await repo.add_message(uuid.UUID(state.session_id), role=role, text=text, source=source)
 
+def _previous_profile_from_row(row: tuple[datetime, dict] | None) -> PreviousProfile | None:
+    """
+    Строка из БД → компактная память о прошлом разговоре.
+
+    Прошлый итог мог быть сохранён другой версией контракта — тогда просто нет
+    памяти, а не сломанный диалог.
+    """
+    if row is None:
+        return None
+
+    finished_at, raw = row
+    if not isinstance(raw, dict):
+        return None
+
+    try:
+        return PreviousProfile(
+            finished_at=finished_at.date().isoformat(),
+            trait_scores=TraitScores.model_validate(raw.get("trait_scores") or {}),
+            notes=[str(n) for n in (raw.get("notes") or [])][:5],
+        )
+    except ValidationError as e:
+        logger.warning("Прошлый профиль не читается (%s), начинаем без памяти", e)
+        return None
+
+
 async def _ensure_db_session_for_user(state: ConversationState, tg_id: int, username: str | None) -> None:
     """
     Гарантирует, что в state есть telegram_id и session_id.
@@ -144,8 +170,16 @@ async def _ensure_db_session_for_user(state: ConversationState, tg_id: int, user
     async with SessionMaker() as db:
         repo = Repo(db)
         await repo.upsert_user(tg_id, username)
+        # прошлый профиль читаем ДО создания новой сессии — она ещё без итога,
+        # так что запрос заведомо не подхватит сам себя
+        previous = await repo.get_last_profile(tg_id)
         sid = await repo.create_session(tg_id)
         state.session_id = str(sid)
+
+    state.previous_profile = _previous_profile_from_row(previous)
+    if state.previous_profile:
+        logger.info("Пользователь %s: подтянут профиль от %s",
+                    tg_id, state.previous_profile.finished_at)
 
     # если есть поле для дельты — инициализируем
     if hasattr(state, "last_saved_signals_count"):
