@@ -49,13 +49,20 @@ class Repo:
         await self.db.refresh(s)
         return s.id
 
-    async def touch_session_state(self, session_id: uuid.UUID, validity_level: int, dialogue_saturated: bool) -> None:
+    async def touch_session_state(
+        self,
+        session_id: uuid.UUID,
+        validity_level: int,
+        dialogue_saturated: bool,
+        state_json: dict | None = None,
+    ) -> None:
         stmt = (
             update(DbSession)
             .where(DbSession.id == session_id)
             .values(
                 validity_level_end=validity_level,
                 dialogue_saturated=dialogue_saturated,
+                state_json=state_json,
             )
         )
         await self.db.execute(stmt)
@@ -70,10 +77,26 @@ class Repo:
                 validity_level_end=validity_level_end,
                 dialogue_saturated=dialogue_saturated,
                 status=status,
+                # сессия закрыта — рабочий снимок профиля больше не нужен
+                state_json=None,
             )
         )
         await self.db.execute(stmt)
         await self.db.commit()
+
+    async def get_active_session(self, telegram_id: int) -> tuple[uuid.UUID, dict | None] | None:
+        """
+        Последняя незакрытая сессия пользователя и её снимок состояния.
+        Снимок может быть None: сессия создана, но процесс упал до первого хода.
+        """
+        res = await self.db.execute(
+            select(DbSession.id, DbSession.state_json)
+            .where(DbSession.user_id == telegram_id, DbSession.status == "active")
+            .order_by(DbSession.started_at.desc())
+            .limit(1)
+        )
+        row = res.first()
+        return (row[0], row[1]) if row else None
 
     async def add_signals(self, session_id: uuid.UUID, signals: list[dict]) -> None:
         """

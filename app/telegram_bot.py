@@ -2,7 +2,9 @@ import os
 import uuid
 import logging
 import tempfile
+import time
 from dataclasses import asdict
+from pydantic import ValidationError
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -29,16 +31,95 @@ from core.db.export import export_session_full
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Простое in-memory хранилище для MVP
+# Горячий кэш активных диалогов. Долговременное хранилище — sessions.state_json,
+# отсюда состояние можно выбрасывать: _get_state поднимет его обратно из БД.
 USER_STATES: dict[int, ConversationState] = {}
+_LAST_SEEN: dict[int, float] = {}
+
+# Час без сообщений — диалог уходит из памяти. Лежит в отдельном словаре, а не
+# внутри USER_STATES, чтобы состояние оставалось просто ConversationState.
+STATE_TTL_SECONDS = 3600
 
 
 # ----------------------------
 # helpers
 # ----------------------------
 
-def _get_state(user_id: int) -> ConversationState:
-    return USER_STATES.setdefault(user_id, ConversationState())
+def _state_from_snapshot(session_id: uuid.UUID, snapshot: dict | None) -> ConversationState:
+    """
+    Собирает состояние по строке БД. Снимок бывает пустым (сессия создана, но процесс
+    упал до первого хода) или несовместимым (контракт состояния менялся между версиями) —
+    в обоих случаях берём чистое состояние, но переиспользуем сессию, чтобы не плодить
+    в БД брошенные active-сессии.
+    """
+    if snapshot:
+        try:
+            return ConversationState.model_validate(snapshot)
+        except ValidationError as e:
+            logger.warning("Снимок сессии %s не читается (%s), начинаем с чистого состояния", session_id, e)
+
+    return ConversationState(session_id=str(session_id))
+
+
+async def _rehydrate_state(user_id: int) -> ConversationState | None:
+    """Достаёт активный диалог из БД. None — если такого нет."""
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        row = await Repo(db).get_active_session(user_id)
+
+    if row is None:
+        return None
+
+    session_id, snapshot = row
+    state = _state_from_snapshot(session_id, snapshot)
+    logger.info("Восстановлен диалог пользователя %s из сессии %s", user_id, session_id)
+    return state
+
+
+def _evict_stale_states(now: float | None = None) -> list[int]:
+    """
+    Выбрасывает из памяти диалоги, в которых давно не писали.
+
+    Выбрасываем только те, у которых есть session_id: без него состояние ни разу
+    не доехало до БД, и rehydrate его уже не вернёт. Такое молча терять нельзя.
+    """
+    now = time.monotonic() if now is None else now
+    cutoff = now - STATE_TTL_SECONDS
+
+    stale = [
+        uid for uid, seen in _LAST_SEEN.items()
+        if seen < cutoff and (USER_STATES.get(uid) is None or USER_STATES[uid].session_id)
+    ]
+    for uid in stale:
+        USER_STATES.pop(uid, None)
+        _LAST_SEEN.pop(uid, None)
+
+    if stale:
+        logger.info("Выгружено из памяти неактивных диалогов: %d", len(stale))
+    return stale
+
+
+def _put_fresh_state(user_id: int) -> ConversationState:
+    """
+    Кладёт в память чистое состояние (/start, сброс). Обязательно отмечает время:
+    записи без отметки уборщик не видит и они остаются в памяти навсегда.
+    """
+    state = ConversationState()
+    USER_STATES[user_id] = state
+    _LAST_SEEN[user_id] = time.monotonic()
+    return state
+
+
+async def _get_state(user_id: int) -> ConversationState:
+    _evict_stale_states()
+
+    state = USER_STATES.get(user_id)
+    if state is None:
+        state = await _rehydrate_state(user_id) or ConversationState()
+        USER_STATES[user_id] = state
+
+    _LAST_SEEN[user_id] = time.monotonic()
+    return state
 
 async def _save_message_to_db(state: ConversationState, role: str, text: str, source: str = "text"):
     if not state.session_id:
@@ -107,6 +188,7 @@ async def _persist_step_state(state: ConversationState) -> None:
             sid,
             validity_level=state.validity_level,
             dialogue_saturated=bool(getattr(state, "dialogue_saturated", False)),
+            state_json=state.model_dump(mode="json"),
         )
 
     # 2) signals
@@ -179,10 +261,9 @@ async def _persist_akme(state: ConversationState, recommendations_text: str, vec
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    USER_STATES[user_id] = ConversationState()
+    state = _put_fresh_state(user_id)
 
     tg = update.effective_user
-    state = USER_STATES[user_id]
 
     # DB: user + session
     await _ensure_db_session_for_user(state, tg.id, tg.username)
@@ -198,7 +279,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = (update.message.text or "").strip()
 
-    state = _get_state(user_id)
+    state = await _get_state(user_id)
     orchestrator: Orchestrator = context.bot_data["orchestrator"]
 
     tg = update.effective_user
@@ -220,8 +301,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     status="reset",
                 )
 
-        USER_STATES[user_id] = ConversationState()
-        state = USER_STATES[user_id]
+        state = _put_fresh_state(user_id)
         await _ensure_db_session_for_user(state, tg.id, tg.username)
 
         await update.message.reply_text("Ок! Начнём заново 🙂", reply_markup=BASE_KB)
@@ -348,7 +428,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    state = USER_STATES.setdefault(user_id, ConversationState())
+    state = await _get_state(user_id)
     orchestrator: Orchestrator = context.bot_data["orchestrator"]
 
     tg = update.effective_user
@@ -414,7 +494,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _save_message_to_db(state, role="assistant", text=response.message, source="system")
 async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    state = _get_state(user_id)
+    state = await _get_state(user_id)
 
     tg = update.effective_user
     await _ensure_db_session_for_user(state, tg.id, tg.username)
@@ -437,7 +517,7 @@ async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    state = _get_state(user_id)
+    state = await _get_state(user_id)
 
     # закрываем текущую сессию как reset (если была)
     if state.session_id:
@@ -452,8 +532,7 @@ async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status="reset",
             )
 
-    USER_STATES[user_id] = ConversationState()
-    state = USER_STATES[user_id]
+    state = _put_fresh_state(user_id)
 
     tg = update.effective_user
     await _ensure_db_session_for_user(state, tg.id, tg.username)
@@ -467,7 +546,7 @@ async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Доступно всем (MVP).
     """
     user_id = update.effective_user.id
-    state = _get_state(user_id)
+    state = await _get_state(user_id)
 
     if not state.session_id:
         await update.message.reply_text("Нет активной сессии для экспорта. Нажми /start 🙂", reply_markup=BASE_KB)

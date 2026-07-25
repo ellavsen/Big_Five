@@ -15,6 +15,14 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "strict"
+# "coroutine ... was never awaited" — забытый await у async-функции. Программа при этом
+# не падает, а тихо работает с корутиной вместо результата. Ловим прогоном, не глазами.
+# Второй фильтр обязателен: это предупреждение всплывает при сборке мусора, уже вне теста,
+# и pytest заворачивает его в PytestUnraisableExceptionWarning — RuntimeWarning его не ловит.
+filterwarnings = [
+    "error::RuntimeWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.mypy]
 python_version = "3.12"

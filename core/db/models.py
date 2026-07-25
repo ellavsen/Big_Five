@@ -63,6 +63,17 @@ class Session(Base):
 
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)  # active/finished/reset
 
+    # Снимок ConversationState: нужен, чтобы рестарт процесса не терял активный диалог.
+    # Живёт только пока сессия активна — finish_session затирает его в NULL, потому что
+    # это сырой психологический профиль (спец. категория ПДн), а итог к тому моменту
+    # уже разложен по synthesis / signals / messages.
+    # Колонка добавлена migrations/001_add_sessions_state_json.sql.
+    #
+    # none_as_null=True обязателен: по умолчанию SQLAlchemy пишет в JSON/JSONB
+    # питоновский None как JSON-литерал 'null', а не как SQL NULL. Профиль при этом
+    # стирается, но строка перестаёт находиться по `state_json IS NULL`.
+    state_json: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+
     user: Mapped["User"] = relationship(back_populates="sessions")
     signals: Mapped[list["Signal"]] = relationship(back_populates="session", cascade="all, delete-orphan")
     synthesis: Mapped["Synthesis | None"] = relationship(back_populates="session", uselist=False, cascade="all, delete-orphan")
