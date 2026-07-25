@@ -53,12 +53,17 @@ def test_akme_vector_from_llm_synthesis():
             "role": ["повышенный контроль"],
         },
         "notes": ["часть контроля выглядит компенсаторной"],
-        "akme_vector": {"unload": ["избыточный контроль процессов"]},
+        "akme_vector": {
+            "core": ["роли с аналитической ответственностью"],
+            "unload": ["избыточный контроль процессов"],
+        },
     }
 
     akme = akme_vector_from_synthesis(synthesis)
 
-    assert "самостоятельный анализ" in akme.core
+    # опоры берутся из akme_vector.core, а не из core_vs_role.core
+    assert "роли с аналитической ответственностью" in akme.core
+    assert "самостоятельный анализ" not in akme.core
     assert "избыточный контроль процессов" in akme.unload
     assert len(akme.environment) >= 1
     # роль + компенсация в notes обязаны попасть в риски
@@ -84,12 +89,15 @@ def test_akme_reads_structured_output_verbatim():
                       "agreeableness": 0.8, "conscientiousness": 0.8,
                       "neuroticism": 0.5},
         core_vs_role={"core": ["самостоятельный анализ"], "role": ["повышенный контроль"]},
-        akme_vector={"unload": ["избыточный контроль процессов"]},
+        akme_vector={
+            "core": ["роли с аналитической ответственностью"],
+            "unload": ["избыточный контроль процессов"],
+        },
     )
 
     akme = akme_vector_from_synthesis(result.model_dump())
 
-    assert "самостоятельный анализ" in akme.core
+    assert "роли с аналитической ответственностью" in akme.core
     assert "избыточный контроль процессов" in akme.unload
     # низкая экстраверсия -> тишина; низкая открытость -> конкретика;
     # высокая добросовестность -> риск гиперконтроля
@@ -132,3 +140,23 @@ def test_undecided_mbti_is_not_shown_at_all():
     from app.formatters import format_mbti
 
     assert format_mbti(mbti_from_traits(TraitScores())) == ""
+
+
+def test_stable_core_traits_are_not_presented_as_strengths():
+    """
+    Регресс: core_vs_role.core («устойчивое ядро личности») подмешивался в блок,
+    подписанный «Опоры (что тебя усиливает)». Человеку с высоким нейротизмом
+    система сообщала, что его чувствительность к стрессу — то, что его усиливает.
+
+    На что опираться — это отдельное поле akme_vector.core.
+    """
+    akme = akme_vector_from_synthesis({
+        "trait_scores": {"neuroticism": 0.85, "conscientiousness": 0.85},
+        "core_vs_role": {"core": ["чувствительность к стрессу"], "role": ["контроль"]},
+        "akme_vector": {"core": ["работа с конкретными задачами"]},
+    })
+
+    assert "работа с конкретными задачами" in akme.core
+    assert "чувствительность к стрессу" not in akme.core
+    # но само наблюдение не теряется: роль по-прежнему уезжает в риски
+    assert any("энергозатрат" in r for r in akme.risk)
