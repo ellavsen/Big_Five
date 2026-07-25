@@ -265,6 +265,13 @@ class Orchestrator:
             "priority_goal": state.priority_goal,
             "trait_closed": {k.value: v for k, v in state.trait_closed.items()},
             "soft_trait_closed": {k.value: v for k, v in state.soft_trait_closed.items()},
+            # Сколько наблюдений набрано по каждой черте. Без этой подсказки
+            # планировщик залипает на самой заметной: в сквозном прогоне он дал
+            # 8 наблюдений по добросовестности и ноль по открытости и экстраверсии,
+            # хотя человек говорил и о том, и о другом.
+            "trait_observations": {
+                t.value: len(state.evidence.signals_for(t)) for t in Trait
+            },
             "dialogue_saturated": state.dialogue_saturated,
             "previous_profile": (
                 state.previous_profile.model_dump(mode="json") if state.previous_profile else None

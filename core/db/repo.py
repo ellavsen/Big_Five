@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import User, Session as DbSession, Signal, Synthesis, Akme, Message, utcnow
+
+
+logger = logging.getLogger(__name__)
 
 
 class Repo:
@@ -185,9 +190,16 @@ class Repo:
 
         try:
             await self.db.commit()
-        except Exception:
-            # на дублях по uq_signal_nodup просто откатываем и продолжаем
+        except IntegrityError:
+            # дубль по uq_signal_nodup_trait — ожидаемо, откатываем и продолжаем
             await self.db.rollback()
+        except Exception:
+            # Всё остальное — не «ну бывает». Раньше здесь глушилось любое
+            # исключение, и из-за этого несовпадение типов колонок молча съедало
+            # ВСЕ наблюдения: в памяти они были, в БД не появлялось ни одного.
+            await self.db.rollback()
+            logger.exception("Не удалось сохранить наблюдения сессии %s", session_id)
+            raise
 
     async def save_synthesis(self, session_id: uuid.UUID, text: str, traits_confidence: dict | None, raw_json: dict | None) -> None:
         stmt = insert(Synthesis).values(
