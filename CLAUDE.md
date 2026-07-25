@@ -1,65 +1,144 @@
-# CLAUDE.md
+# CLAUDE.md — Neuro
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+Telegram-бот, который в форме живого разговора собирает психологический профиль
+и выдаёт «мягкий синтез» + практические рекомендации (Akme-вектор).
+Язык интерфейса, промптов и всех пользовательских текстов — русский.
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+Общие правила работы с кодом наследуются из `/Users/mac/Desktop/CLAUDE.md`.
+Ниже — только то, что специфично для этого проекта.
 
-## 1. Think Before Coding
+## Как я работаю (обязательно)
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+Цикл на каждый этап: **audit → confirm → implement → test**.
 
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+1. Сначала показать: что понял, план, список файлов, которые тронешь, и риски.
+2. Пауза. Ждать «ок». Без подтверждения код не менять.
+3. После «ок» — внедрять и показывать диффы.
+4. Прогнать verify-критерий этапа и показать вывод команд.
+5. Один этап за раз, не забегать вперёд.
 
-## 2. Simplicity First
+Границы: менять только то, что требует задача; не рефакторить вокруг; не вводить
+абстракции и не проектировать «на будущее»; перед изменением схемы БД, миграцией
+или правкой конфига — сначала план, не применять молча. Если выбираешь из
+нескольких путей — дать рекомендацию, а не полный обзор.
 
-**Minimum code that solves the problem. Nothing speculative.**
+## Что сохранить любой ценой
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
+Это и есть ценность проекта. Если рефакторинг ломает один из пунктов —
+**остановиться и предупредить**, а не «упрощать до неузнаваемости».
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+- **Consent-first синтез («2612-правило»)**: итог выдаётся только после явного
+  подтверждения пользователем (кнопка «✅ Подвести итог»).
+- Тёплый, неоценочный тон промптов: «не диагноз, а вероятности».
+- Накопление доказательств вместо преждевременного типирования.
+- Разделение «ядро vs роль/компенсация».
+- Детерминированные модули отдельно от LLM — интерпретируемо и дёшево.
+- `energy_economy`, `compensation_patterns`, `team_mirror`, `role_vs_core` — это ядро
+  будущего продукта «управление энергией», а не второстепенная логика. Усиливаем, не режем.
 
-## 3. Surgical Changes
+## Целевое видение
 
-**Touch only what you must. Clean up only your own mess.**
+Neuro = инструмент управления собственной энергией и командной динамикой,
+а не «ещё один MBTI-тест».
 
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
+- **B2C-ядро**: личная карта энергии — опоры / восстановление / среда / риски выгорания;
+  профиль растёт во времени.
+- **Задел под B2B**: обезличенная агрегированная карта энергии команды — это `team_mirror`,
+  доведённый до продукта.
+- **Методология**: Big Five (OCEAN) — научное ядро; MBTI-4-буквы — популярная обёртка,
+  в UI и промптах явно помечена как интерпретация, а не истина. Маппинг приблизительный
+  (E/I↔Extraversion, S/N↔Openness, T/F↔Agreeableness, J/P↔Conscientiousness) — так и подписывать.
+- **Поведенческие индикаторы** (энергия / компенсации / роль) — главный дифференциатор,
+  живут отдельным слоем.
 
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
+## Как запускать
 
-The test: Every changed line should trace directly to the user's request.
+Python 3.12 (3.13 несовместим с `python-telegram-bot==20.7`). Всё из корня проекта.
 
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
+```bash
+source venv/bin/activate
+python -m app.main          # Telegram-бот
+pytest -q                   # тесты
+ruff check app core modules tests
 ```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
+
+`.env` (в git не попадает, шаблон — `.env.example`):
+`OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`, `DATABASE_URL`.
+
+База: PostgreSQL 16 через Homebrew, база `neuro_db`, схема разворачивается
+`init_db()` при старте бота (`create_all`, не Alembic — новые колонки в уже
+существующую базу сами не доедут).
+
+## Архитектура (как есть, без мнимой мультиагентности)
+
+```
+app/telegram_bot.py (Telegram I/O, USER_STATES in-memory)
+  → core/orchestrator.py  один планировщик хода: модули → валидность → оси → LLM
+      → core/llm.py       OpenAI (plan_turn / synthesize)
+      → modules/          детерминированные детекторы + registry.MODULES
+      → core/validity.py  валидность, закрытие осей, критерий 2612
+      → core/transitions.py  выбор агента и приоритетной цели
+      → core/db/          SQLAlchemy async → Postgres (repo.py — единственный слой доступа)
+prompts/  turn_planner.md и synthesizer.md загружаются;
+          diagnost.md и interpreter.md НЕ загружаются нигде (см. Этап 3)
 ```
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+`modules/synthesizer.py` — детерминированный разбор осей (`core / compensated / boundary`),
+подключён в промпт синтеза полем `deterministic_profile`. Признак компенсации читается
+из `state.notes` (модули пишут туда `compensation:control`).
 
----
+## Статус
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+**Этап 0 закрыт** (коммит `4adf863`): `.gitignore` до первого `git add`, `.env.example`,
+`print` с ПДн заменены на `logging`, колонки `users.consent_at` / `consent_version`,
+удалены `exports/` с реальными транскриптами.
+
+**Этап 1 закрыт** (коммит `b5ca7f5`):
+
+- починены оба NameError в кнопках («Показать распознанный текст», «Продолжим разговор»);
+- починена вся цепочка синтеза: контракт `axes_confidence` приведён к тому, что требует
+  `prompts/synthesizer.md`; оркестратор больше не парсит JSON из связного текста и
+  сохраняет `result.model_dump()`; `/akme` получает реальные `axis_map` / `core_vs_role`;
+- `vector_json` считается через `dataclasses.asdict` (было всегда `None`);
+- `handle_audio` и ветка исправления транскрипта создают сессию и пишут в БД;
+- удалён мёртвый код (`core/renderer.py`, `merge_notes`, `safe_trim_history`,
+  `recompute_axis_closed`, `Phase`, дубли `utcnow` / `extract_json`);
+- тесты переписаны под реальный API: **32 зелёных** (было 0 — прогон падал на сборке);
+- ruff + pytest в GitHub Actions, `Dockerfile`, конфиг инструментов в `pyproject.toml`.
+
+Не проверено локально: `Dockerfile` не собирался (Docker не запущен),
+`.github/workflows/ci.yml` не валидировался (PyYAML нет в системе).
+
+## Этап 2 — следующий
+
+- Structured outputs (`response_format` / Pydantic-parse) вместо регексп-парсинга и
+  хрупкого fallback.
+- `max_tokens`, `timeout`, `temperature`, retry с backoff; prompt caching для
+  повторяющегося контекста.
+- Rehydrate состояния из БД при входящем сообщении + TTL/эвикция для `USER_STATES`
+  (сейчас рестарт процесса теряет активные диалоги).
+- Переделать закрытие осей: убрать «одно слово = `direct_example` = ось закрыта»,
+  ввести накопление сигналов и пороги уверенности; русский матчинг с лемматизацией
+  (pymorphy3/natasha) и учётом отрицаний («не контролирую» ≠ контроль).
+- Verify: нет регексп-парсинга JSON; тест на таймаут/ретрай; тест, что одно слово
+  ось не закрывает; рестарт процесса не теряет активный диалог.
+
+## Известные вопросы, отложенные осознанно
+
+- `modules/energy_economy.py` ставит `source="module"`, хотя в `AxisSource` есть `"energy"`.
+  Из-за этого правило «≥2 источников» в `axis_is_closed` и `confidence="high"` в
+  `modules/synthesizer.py` не срабатывают никогда. Чинить в Этапе 2 вместе с закрытием осей.
+- Кнопка «✅ Подвести итог» вызывает `step(state, "")` → пустой текст снижает `validity_level` на 1.
+- `users.telegram_id` получил ненужный `DEFAULT nextval(...)`: SQLAlchemy сделал
+  BigInteger-PK автоинкрементным, хотя id приходит от Telegram.
+- `prompts/diagnost.md` и `interpreter.md` не загружаются — свернуть мнимую
+  мультиагентность в Этапе 3.
+
+## Границы окружения
+
+- `.env` не коммитить, ключи не печатать в stdout и не показывать в выводе.
+- Психологический профиль = спецкатегория ПДн (GDPR/152-ФЗ): согласие, ретеншен,
+  возможность удаления — учитывать в дизайне.
+- `exports/` и `*.db` под `.gitignore` — там реальные транскрипты разговоров.
+- MacBook Air M1, 8 GB: всё должно запускаться локально, тяжёлые модели — опционально.
+- Репозиторий пока только локальный, на GitHub не выложен (витрина — Этап 4).
