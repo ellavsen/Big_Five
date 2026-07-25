@@ -1,26 +1,37 @@
-from core.models import ConversationState
-from modules.role_vs_core import role_vs_core_module
-from modules.energy_economy import energy_economy_module
-from core.models import Axis
+from core.models import Axis, ConversationState
+from modules.energy_economy import energy_economy
+from modules.role_vs_core import role_vs_core
 
 
-def test_role_vs_core_sets_flag():
+def test_role_vs_core_marks_role_without_core():
     s = ConversationState()
-    r = role_vs_core_module(s, "По работе приходится быть очень общительной, так надо.")
-    assert r.activated is True
-    assert "role_core_tension" in s.flags
 
-def test_energy_module_adds_signals():
+    role_vs_core(s, "По работе приходится быть очень общительной, так надо.")
+
+    assert "role_dominant" in s.notes
+
+
+def test_role_vs_core_adds_tf_signal_on_core_expression():
     s = ConversationState()
-    r = energy_economy_module(
-        s,
-        "Созвоны и встречи выматывают, потом хочется выдохнуть."
-    )
 
-    assert r.activated is True
+    role_vs_core(s, "Мне важно, чтобы людям было спокойно рядом.")
 
-    ei_signals = s.evidence.signals_for(Axis.EI)
-    assert len(ei_signals) >= 1
+    assert "core_expression" in s.notes
+    assert [sig.direction for sig in s.evidence.signals_for(Axis.TF)] == ["F"]
 
-    assert ei_signals[0].source == "energy"
-    assert ei_signals[0].direction in {"I", "E"}
+
+def test_energy_economy_notes_depletion():
+    s = ConversationState()
+
+    energy_economy(s, "Созвоны выматывают, после них нет сил.")
+
+    assert "energy:depletion" in s.notes
+
+
+def test_energy_economy_ignores_neutral_text():
+    s = ConversationState()
+
+    energy_economy(s, "Вчера был обычный рабочий день.")
+
+    assert s.notes == []
+    assert s.evidence.signals == []

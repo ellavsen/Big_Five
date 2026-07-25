@@ -1,9 +1,21 @@
 [project]
-name = "mbti-agent"
+name = "neuro"
 version = "0.1.0"
-requires-python = ">=3.10"
-dependencies = [
-  "pydantic>=2.7",
-  "python-dotenv>=1.0",
-  "openai>=1.40.0"
-]
+requires-python = ">=3.12"
+# Зависимости живут в requirements.txt — одна точка правды.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

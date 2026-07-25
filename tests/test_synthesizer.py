@@ -1,24 +1,51 @@
-from core.models import ConversationState, Axis, AxisSignal
+from core.models import Axis, AxisSignal, ConversationState
 from modules.synthesizer import synthesizer_module
 
 
-def test_synthesizer_with_compensation():
+def _state_with_jp_signal() -> ConversationState:
     s = ConversationState()
-    s.flags.add("compensation_pattern_detected")
-
-    s.evidence.signals.append(
-        AxisSignal(
-            axis=Axis.JP,
-            direction="J",
-            source="team",
-            text="Я всегда дожимаю сроки",
-            context="team",
-        )
+    s.evidence.add(
+        AxisSignal(axis=Axis.JP, direction="J", source="module", text="дожимаю сроки")
     )
+    return s
+
+
+def test_axis_status_core_without_compensation():
+    profile = synthesizer_module(_state_with_jp_signal())
+
+    assert profile["has_compensation"] is False
+    assert profile["axes"]["JP"]["status"] == "core"
+    assert profile["axes"]["JP"]["dominant"] == "J"
+
+
+def test_axis_status_compensated_when_module_flagged_compensation():
+    """
+    Регресс: признак компенсации читался из несуществующего state.flags
+    и модуль падал AttributeError. Источник — notes, куда пишут детерминированные модули.
+    """
+    s = _state_with_jp_signal()
+    s.add_note("compensation:control")
 
     profile = synthesizer_module(s)
 
-    jp = profile["axes"]["J/P"]
-    assert jp["status"] == "compensated"
-    assert jp["dominant"] == "J"
-    assert jp["confidence"] == "medium"
+    assert profile["has_compensation"] is True
+    assert profile["axes"]["JP"]["status"] == "compensated"
+    assert profile["axes"]["JP"]["dominant"] == "J"
+
+
+def test_axis_without_signals_is_unknown():
+    profile = synthesizer_module(ConversationState())
+
+    assert profile["axes"]["EI"]["status"] == "unknown"
+    assert profile["axes"]["EI"]["dominant"] is None
+
+
+def test_conflicting_directions_give_boundary():
+    s = ConversationState()
+    s.evidence.add(AxisSignal(axis=Axis.EI, direction="I", source="module", text="устаю от созвонов"))
+    s.evidence.add(AxisSignal(axis=Axis.EI, direction="E", source="llm", text="люблю обсуждать вслух"))
+
+    profile = synthesizer_module(s)
+
+    assert profile["axes"]["EI"]["status"] == "boundary"
+    assert profile["axes"]["EI"]["dominant"] is None

@@ -32,7 +32,8 @@ def _axis_sources(state: ConversationState, axis: Axis) -> set[str]:
 
 
 def _has_compensation(state: ConversationState) -> bool:
-    return "compensation_pattern_detected" in state.flags
+    # признаки компенсации ставят детерминированные модули: note вида "compensation:control"
+    return any(n.startswith("compensation:") for n in state.notes)
 
 
 # =========================

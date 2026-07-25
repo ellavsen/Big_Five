@@ -1,28 +1,28 @@
-import json
+from core.models import SynthesisResult, TurnPlan
+
 
 class FakeLLM:
-    def __init__(self, reply_message="Тестовый вопрос"):
+    """
+    Подмена AsyncLLMClient для тестов: тот же публичный API (plan_turn / synthesize),
+    но без сети — возвращает заранее заданные объекты.
+    """
+
+    def __init__(
+        self,
+        reply_message: str = "Тестовый вопрос",
+        axis_signals: list | None = None,
+        synthesis: SynthesisResult | None = None,
+    ):
         self.reply_message = reply_message
+        self.axis_signals = axis_signals or []
+        self.synthesis = synthesis
 
-    async def generate_json(self, system_prompt: str, user_prompt: str) -> str:
-        # возвращаем строгий JSON как модель
-        return json.dumps({
-            "agent_communication": {"G":"ctx3-sig1-val1-map0-sum0","VL":4,"PG":"ctx","AG":"diagnost","R":"test"},
-            "A": "ask",
-            "message": self.reply_message
-        }, ensure_ascii=False)
+    async def plan_turn(self, system_prompt: str, user_prompt: str) -> TurnPlan:
+        return TurnPlan(
+            A="ask",
+            message=self.reply_message,
+            axis_signals=list(self.axis_signals),
+        )
 
-    async def extract_meaning(self, user_text: str) -> dict:
-        # Простой фейковый парсер смысла, достаточный для тестов.
-        summary = (user_text or "").strip()
-        return {
-            "summary": summary,
-            "emotions": [],
-            "energy_shift": "neutral",
-            "implicit_need": "",
-            "key_tension": None,
-            "self_reflection_level": 0,
-            "axis_hints": [],
-            "suggested_move": None,
-            "content_level": "minimal",
-        }
+    async def synthesize(self, system_prompt: str, user_prompt: str) -> SynthesisResult:
+        return self.synthesis or SynthesisResult(message="Итоговый текст")

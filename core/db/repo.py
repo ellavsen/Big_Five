@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db.models import User, Session as DbSession, Signal, Synthesis, Akme, Message
-from datetime import datetime, timezone
-
-def utcnow():
-    return datetime.now(timezone.utc)
+from core.db.models import User, Session as DbSession, Signal, Synthesis, Akme, Message, utcnow
 
 
 class Repo:

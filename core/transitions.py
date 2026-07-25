@@ -1,8 +1,7 @@
 # core/transitions.py
 from __future__ import annotations
-from core.config import STRICT_VL_THRESHOLD, STRICT_MODE
+from core.config import STRICT_VL_THRESHOLD
 from core.models import ConversationState
-from core.models import AgentResponse
 
 def choose_priority_goal(state: ConversationState) -> str:
     g = state.goals

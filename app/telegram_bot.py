@@ -2,6 +2,7 @@ import os
 import uuid
 import logging
 import tempfile
+from dataclasses import asdict
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,7 +15,6 @@ from core.stt import STTClient
 from app.buttons import BASE_KB, AFTER_SYNTH_KB, SYNTH_CONFIRM_KB, VOICE_KB
 from app.formatters import format_akme
 from modules.akme_vector import akme_vector_from_synthesis
-from core.utils import extract_json
 
 from core.orchestrator import Orchestrator
 from core.models import ConversationState
@@ -254,7 +254,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Если хочешь исправить — просто отправь правильный текст следующим сообщением.",
             reply_markup=BASE_KB
         )
-        await _save_message_to_db(state, role="user", text=fixed_text, source="transcript_fix")
         return
     
     # --- ПОДТВЕРЖДЕНИЕ ИТОГА ---
@@ -277,8 +276,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "↩️ Продолжим разговор":
         state.synthesis_confirmed = False
-        await update.message.reply_text("Хорошо, продолжаем 🙂", reply_markup=BASE_KB)
-        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
+        reply = "Хорошо, продолжаем 🙂"
+        await update.message.reply_text(reply, reply_markup=BASE_KB)
+        await _save_message_to_db(state, role="assistant", text=reply, source="system")
         return
 
     # --- АКМЕ ---
@@ -300,11 +300,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # заменяем последний transcript на исправленный
         state.last_transcript = fixed_text
+        await _save_message_to_db(state, role="user", text=fixed_text, source="transcript_fix")
 
         response = await orchestrator.step(state, fixed_text)
+        await _persist_step_state(state)
 
         if response.A == "synthesize":
+            await _persist_synthesis_and_finish(state, response.message)
             await update.message.reply_text(response.message, reply_markup=AFTER_SYNTH_KB)
+            await _save_message_to_db(state, role="assistant", text=response.message, source="system")
             return
 
         await update.message.reply_text(response.message, reply_markup=BASE_KB)
@@ -347,6 +351,9 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = USER_STATES.setdefault(user_id, ConversationState())
     orchestrator: Orchestrator = context.bot_data["orchestrator"]
 
+    tg = update.effective_user
+    await _ensure_db_session_for_user(state, tg.id, tg.username)
+
     # 1) достаём voice/audio
     file_id = None
     if update.message.voice:
@@ -383,6 +390,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 4) дальше как обычный текст
     response = await orchestrator.step(state, text)
+    await _persist_step_state(state)
 
     if (
         response.A == "ask"
@@ -391,15 +399,19 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         and not state.synthesis
     ):
         await update.message.reply_text(response.message, reply_markup=SYNTH_CONFIRM_KB)
+        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
         return
 
     if response.A == "synthesize":
+        await _persist_synthesis_and_finish(state, response.message)
         await update.message.reply_text(response.message, reply_markup=AFTER_SYNTH_KB)
+        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
         return
     await update.message.reply_text(
         response.message,
         reply_markup=VOICE_KB
     )
+    await _save_message_to_db(state, role="assistant", text=response.message, source="system")
 async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = _get_state(user_id)
@@ -415,17 +427,10 @@ async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    synthesis = state.synthesis
-# если synthesis — это обёртка с message внутри (как у тебя сейчас)
-    if isinstance(synthesis, dict) and isinstance(synthesis.get("message"), str):
-        msg = synthesis.get("message")
-        if msg.strip().startswith("```json"):
-            synthesis = extract_json(msg)
     akme = akme_vector_from_synthesis(state.synthesis)
     text = format_akme(akme)
 
-    vector_json = akme.model_dump() if hasattr(akme, "model_dump") else (akme if isinstance(akme, dict) else None)
-    await _persist_akme(state, recommendations_text=text, vector_json=vector_json)
+    await _persist_akme(state, recommendations_text=text, vector_json=asdict(akme))
 
     await update.message.reply_text(text, reply_markup=AFTER_SYNTH_KB)
 

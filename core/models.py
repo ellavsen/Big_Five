@@ -1,15 +1,8 @@
 # core/models.py
 from __future__ import annotations
-from modules.akme_vector import AkmeVector
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal
 from pydantic import BaseModel, Field, ConfigDict
-
-class Phase(Enum):
-    DIAGNOSTIC = "diagnostic"
-    SYNTHESIS = "synthesis"
-    AKME = "akme"
-    FINISHED = "finished"
 
 class Axis(str, Enum):
     EI = "EI"
@@ -21,7 +14,7 @@ class Axis(str, Enum):
 class AxisDirection(str, Enum):
     # EI
     E = "E"
-    I = "I"
+    I = "I"  # noqa: E741 — это полюс оси MBTI, а не переменная
     # SN
     S = "S"
     N = "N"
@@ -105,7 +98,9 @@ class SynthesisResult(BaseModel):
     Финальный ответ синтезатора.
     В твоей концепции: валидный JSON и никаких текстов вне JSON.
     """
-    axes_confidence: dict[str, float] | None = None
+    # форма ровно та, что описана в prompts/synthesizer.md:
+    # {"EI": {"confidence": 0.72, "stability": "устойчивая"}}
+    axes_confidence: dict[str, AxisConfidence] | None = None
     model_config = ConfigDict(extra="forbid")
     
     message: str

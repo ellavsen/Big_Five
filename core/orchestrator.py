@@ -14,8 +14,9 @@ from core.validity import (
 )
 from core.transitions import choose_agent, choose_priority_goal
 from core.config import STRICT_MODE, STRICT_VL_THRESHOLD
-from core.utils import serialize_axis_evidence, extract_json
+from core.utils import serialize_axis_evidence
 from modules.registry import MODULES
+from modules.synthesizer import synthesizer_module
 
 
 logger = logging.getLogger(__name__)
@@ -183,11 +184,10 @@ class Orchestrator:
             result = await self.llm.synthesize(self.synthesizer_prompt, user_prompt)
 
             state.add_assistant(result.message)
-            # 2) главное: парсим JSON из result.message
-            synthesis_dict = extract_json(result.message)
-            # 3) сохраняем именно dict синтеза
-            state.synthesis = synthesis_dict
-            
+            # result.message — связный текст для человека, а вся структура уже разобрана
+            # в SynthesisResult: axis_map / core_vs_role / akme_vector нужны /akme
+            state.synthesis = result.model_dump()
+
             state.dialogue_completed = True
             state.dialogue_saturated = True
             return AgentResponse(
@@ -278,8 +278,14 @@ class Orchestrator:
         # STRICT_MODE = только “тон осторожности”, НЕ запрет
         strict_hint = bool(STRICT_MODE and state.validity_level < STRICT_VL_THRESHOLD)
 
+        # детерминированный разбор осей (ядро / компенсация / пограничность) —
+        # считается без LLM и идёт в промпт как опора, а не как готовый вывод
+        det_profile = synthesizer_module(state)
+        det_profile.pop("notes", None)  # notes передаются отдельным полем ниже
+
         ctx = {
             "strict_mode": strict_hint,
+            "deterministic_profile": det_profile,
             "validity_level": state.validity_level,
             "goals": {"ctx": g.ctx, "sig": g.sig, "val": g.val, "map": g.map, "sum": g.sum},
             "axis_closed": {k.value: v for k, v in state.axis_closed.items()},

@@ -1,29 +1,26 @@
-from core.models import ConversationState
-from modules.compensation_patterns import compensation_patterns_module
+from core.models import Axis, ConversationState
+from modules.compensation_patterns import compensation_patterns
 
 
-def test_compensation_detected():
+def test_compensation_adds_note_and_signal():
     s = ConversationState()
 
-    r = compensation_patterns_module(
+    compensation_patterns(
         s,
-        "Мне приходится постоянно всё контролировать, "
-        "иначе без меня команда разваливается, и это очень выматывает."
+        "Мне приходится постоянно всё контролировать, иначе без меня команда разваливается.",
     )
 
-    assert r.activated is True
-    assert "compensation_pattern_detected" in s.flags
-    assert r.vl_delta == 0
+    assert "compensation:control" in s.notes
+
+    jp = s.evidence.signals_for(Axis.JP)
+    assert len(jp) == 1
+    assert jp[0].direction == "J"
 
 
-def test_compensation_with_awareness():
+def test_no_compensation_without_markers():
     s = ConversationState()
 
-    r = compensation_patterns_module(
-        s,
-        "Я понимаю, что постоянно контролирую процессы не потому что люблю это, "
-        "а потому что иначе всё ломается, и это не совсем моё."
-    )
+    compensation_patterns(s, "Вчера гуляли в парке, было спокойно.")
 
-    assert r.activated is True
-    assert r.vl_delta == 1
+    assert s.notes == []
+    assert s.evidence.signals == []

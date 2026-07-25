@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from core.models import ConversationState, AgentResponse
+from core.models import AgentResponse, ConversationState, SynthesisResult
 
 def test_state_defaults():
     s = ConversationState()
@@ -23,3 +23,18 @@ def test_agent_response_forbid_extra():
             message="ok",
             extra_field="boom"  # должно упасть
         )
+
+
+def test_synthesis_result_accepts_axes_confidence_from_prompt():
+    """
+    Регресс: prompts/synthesizer.md велит вернуть axes_confidence как объекты
+    {confidence, stability}, а модель ждала число — синтез падал ValidationError
+    ровно после нажатия «✅ Подвести итог».
+    """
+    result = SynthesisResult.model_validate({
+        "message": "тёплый текст",
+        "axes_confidence": {"EI": {"confidence": 0.72, "stability": "устойчивая"}},
+    })
+
+    assert result.axes_confidence["EI"].confidence == 0.72
+    assert result.axes_confidence["EI"].stability == "устойчивая"

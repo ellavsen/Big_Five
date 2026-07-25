@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import List
 from modules.akme_vector import AkmeVector
 
 def _bullets(items: List[str]) -> str:

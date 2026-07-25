@@ -4,7 +4,7 @@ from typing import Dict
 from dataclasses import dataclass
 from collections import defaultdict
 
-from core.models import ConversationState, AxisSignal, Axis, AxisEvidence
+from core.models import ConversationState, Axis, AxisEvidence
 
 
 # =========================
@@ -61,10 +61,6 @@ def soft_axis_closed(axis: Axis, evidence: AxisEvidence) -> bool:
     indirect = [s for s in signals if not s.direct_example]
 
     return bool(direct and indirect)
-
-
-def recompute_axis_closed(evidence: AxisEvidence) -> Dict[Axis, bool]:
-    return {axis: axis_is_closed(axis, evidence) for axis in Axis}
 
 
 # =========================

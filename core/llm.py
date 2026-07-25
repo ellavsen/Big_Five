@@ -1,13 +1,12 @@
 # core/llm.py
 from __future__ import annotations
 
-import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Optional
 from openai import AsyncOpenAI
-import re
 from core.models import TurnPlan, SynthesisResult
+from core.utils import extract_json
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +58,7 @@ class AsyncLLMClient:
         text = (resp.output_text or "").strip()
         logger.debug("TurnPlan: получен ответ LLM, %d символов", len(text))
         try:
-            raw = self._safe_extract_json(text)
+            raw = extract_json(text)
             normalized = self._normalize_turnplan_payload(raw)
             return TurnPlan.model_validate(normalized)
 
@@ -72,27 +71,6 @@ class AsyncLLMClient:
                 axis_signals=[],
             )
 
-    def _safe_extract_json(self, text: str) -> dict:
-        """
-        Пытается извлечь JSON из ответа LLM.
-        Работает даже если до/после есть текст.
-        """
-        if not text or not text.strip():
-            raise ValueError("LLM returned empty response")
-
-        text = text.strip()
-
-    # 1) если это уже чистый JSON
-        if text.startswith("{") and text.endswith("}"):
-            return json.loads(text)
-
-    # 2) пробуем вытащить JSON из текста
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-
-        raise ValueError("No JSON object found in LLM response")
-    
     async def synthesize(self, system_prompt: str, user_prompt: str) -> SynthesisResult:
         resp = await self.client.responses.create(
             model=self.model,
@@ -101,9 +79,15 @@ class AsyncLLMClient:
                 {"role": "user", "content": user_prompt},
             ],
         )
-        text = resp.output_text.strip()
+
+        text = (resp.output_text or "").strip()
+        logger.debug("Synthesis: получен ответ LLM, %d символов", len(text))
         try:
-            data = json.loads(text)
-        except Exception:
-            data = {"message": text or "Похоже, данных пока мало для связного синтеза.", "notes": []}
-        return SynthesisResult.model_validate(data)
+            return SynthesisResult.model_validate(extract_json(text))
+        except Exception as e:
+            # синтез не должен падать в лицо пользователю, но и молчать об этом нельзя
+            logger.warning("Synthesis: не удалось разобрать ответ LLM (%s), отдаём текст как есть", e)
+            return SynthesisResult(
+                message=text or "Похоже, данных пока мало для связного синтеза.",
+                notes=[],
+            )
