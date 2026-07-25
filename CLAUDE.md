@@ -111,30 +111,39 @@ prompts/  turn_planner.md и synthesizer.md загружаются;
 Не проверено локально: `Dockerfile` не собирался (Docker не запущен),
 `.github/workflows/ci.yml` не валидировался (PyYAML нет в системе).
 
-## Этап 2 — следующий
+**Этап 2A закрыт** (коммит `a75f9f6`): `responses.parse` + strict-схема вместо
+регексп-парсинга; `timeout`/`max_retries`/`max_output_tokens`/`temperature`;
+`SynthesisResult` переписан под strict (открытые словари и `ge/le` API не принимает);
+починена инверсия оси EI; промпт синтезатора приведён к новой схеме. Тесты 32 → 42.
 
-- Structured outputs (`response_format` / Pydantic-parse) вместо регексп-парсинга и
-  хрупкого fallback.
-- `max_tokens`, `timeout`, `temperature`, retry с backoff; prompt caching для
-  повторяющегося контекста.
-- Rehydrate состояния из БД при входящем сообщении + TTL/эвикция для `USER_STATES`
-  (сейчас рестарт процесса теряет активные диалоги).
-- Переделать закрытие осей: убрать «одно слово = `direct_example` = ось закрыта»,
-  ввести накопление сигналов и пороги уверенности; русский матчинг с лемматизацией
-  (pymorphy3/natasha) и учётом отрицаний («не контролирую» ≠ контроль).
-- Verify: нет регексп-парсинга JSON; тест на таймаут/ретрай; тест, что одно слово
-  ось не закрывает; рестарт процесса не теряет активный диалог.
+Этап 2 разбит на 2A / 2B / 2C — полный список с verify-критериями в
+[docs/ROADMAP.md](docs/ROADMAP.md). Следующий шаг — **2B**: `sessions.state_json`,
+rehydrate и TTL для `USER_STATES`.
+
+## Контракт LLM-слоя (не сломать)
+
+- Обе модели (`TurnPlan`, `SynthesisResult`) уходят в API как **strict-схемы**.
+  Strict не принимает открытые словари (`Dict[str, X]` → `additionalProperties`),
+  `ge/le`, `pattern`, `format`. Локальный хелпер SDK это пропускает молча — отказ
+  приходит от API при запросе. Guard: `tests/test_llm.py::test_schema_is_strict_compatible`.
+- **Полярность осей — одна для всех: `1.0` = первая буква названия оси** (E / S / T / J).
+  Задана в `modules/akme_vector.py::_dominant_letter` и продублирована в
+  `prompts/synthesizer.md`. Менять только в двух местах сразу.
+- `axis_map` описывает наблюдаемое поведение **целиком**, включая ролевое;
+  разделение «ядро против роли» живёт отдельным полем `core_vs_role`.
+- `state.synthesis` = `SynthesisResult.model_dump()`, и `/akme` читает его напрямую,
+  без переходников. Переименование полей ломает `akme_vector_from_synthesis`.
 
 ## Известные вопросы, отложенные осознанно
 
-- `modules/energy_economy.py` ставит `source="module"`, хотя в `AxisSource` есть `"energy"`.
-  Из-за этого правило «≥2 источников» в `axis_is_closed` и `confidence="high"` в
-  `modules/synthesizer.py` не срабатывают никогда. Чинить в Этапе 2 вместе с закрытием осей.
 - Кнопка «✅ Подвести итог» вызывает `step(state, "")` → пустой текст снижает `validity_level` на 1.
 - `users.telegram_id` получил ненужный `DEFAULT nextval(...)`: SQLAlchemy сделал
   BigInteger-PK автоинкрементным, хотя id приходит от Telegram.
 - `prompts/diagnost.md` и `interpreter.md` не загружаются — свернуть мнимую
   мультиагентность в Этапе 3.
+- Дефекты закрытия осей (`direct_example` от одного слова, `soft_axis_closed` без
+  проверки согласованности, `source="module"` вместо `"energy"`, дубли сигналов от LLM)
+  собраны в 2C — см. ROADMAP.
 
 ## Границы окружения
 
