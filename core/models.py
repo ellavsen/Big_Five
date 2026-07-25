@@ -224,7 +224,20 @@ class ConversationState(BaseModel):
             self.notes.append(text)
 
     def add_signals(self, signals: List[AxisSignal]) -> None:
+        """
+        Складывает сигналы, отсекая повторы по (axis, direction, text).
+
+        LLM охотно переотправляет наблюдение, которое уже лежит в evidence, дословно.
+        Без этого фильтра дубль накручивал бы вес закрытия оси на пустом месте.
+        То же ограничение стоит в БД — uq_signal_nodup.
+        """
+        seen = {(s.axis, s.direction, s.text) for s in self.evidence.signals}
+
         for s in signals:
+            key = (s.axis, s.direction, s.text)
+            if key in seen:
+                continue
+            seen.add(key)
             self.evidence.add(s)
 
     def clamp_vl(self, delta: int) -> int:

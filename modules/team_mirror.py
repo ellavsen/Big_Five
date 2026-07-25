@@ -1,6 +1,7 @@
 # modules/team_mirror.py
 from __future__ import annotations
 
+from core.matching import find_marker, has_episode
 from core.models import ConversationState, Axis, AxisSignal
 
 
@@ -23,15 +24,7 @@ TEAM_ROLE_MARKERS = [
     "помогаю коллегам",
 ]
 
-EPISODE_MARKERS = [
-    "вчера",
-    "сегодня",
-    "на прошлой неделе",
-    "недавно",
-    "однажды",
-    "в тот момент",
-    "в какой-то момент",
-]
+SUPPORT_MARKERS = ["поддерж", "сглаж", "гармони", "чтобы никому не было плохо"]
 
 
 def team_mirror(state: ConversationState, text: str) -> None:
@@ -39,9 +32,7 @@ def team_mirror(state: ConversationState, text: str) -> None:
     Фиксирует паттерн повторяющейся роли в команде.
     Не интерпретирует личность, а добавляет заметку и слабые сигналы.
     """
-    t = (text or "").lower()
-
-    if not any(m in t for m in TEAM_ROLE_MARKERS):
+    if not find_marker(text, TEAM_ROLE_MARKERS):
         return
 
     state.add_note(
@@ -49,7 +40,7 @@ def team_mirror(state: ConversationState, text: str) -> None:
     )
 
     # direct_example=True ставим только если это конкретный эпизод
-    is_episode = any(m in t for m in EPISODE_MARKERS)
+    is_episode = has_episode(text)
 
     # Слабые сигналы как "второй источник" (module), чтобы оси могли закрываться.
     # Очень аккуратно: роль в команде часто коррелирует с J (структура/ответственность)
@@ -69,7 +60,7 @@ def team_mirror(state: ConversationState, text: str) -> None:
     )
 
     # TF: если явно про поддержку/гармонизацию
-    if any(x in t for x in ["поддерж", "сглаж", "гармони", "чтобы никому не было плохо"]):
+    if find_marker(text, SUPPORT_MARKERS):
         signals.append(
             AxisSignal(
                 axis=Axis.TF,

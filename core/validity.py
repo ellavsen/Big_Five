@@ -1,9 +1,15 @@
 # core/validity.py
 from __future__ import annotations
 from typing import Dict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import defaultdict
 
+from core.config import (
+    AXIS_CLOSE_SCORE,
+    AXIS_DOMINANCE,
+    AXIS_MIN_SIGNALS,
+    AXIS_SOFT_SCORE,
+)
 from core.models import ConversationState, Axis, AxisEvidence
 
 
@@ -21,46 +27,83 @@ class ValidityUpdate:
 # AXIS CLOSURE LOGIC
 # =========================
 
-def axis_is_closed(axis: Axis, evidence: AxisEvidence) -> bool:
+@dataclass
+class AxisWeight:
     """
-    Жёсткое закрытие оси:
-    - прямой пример
-    - или ≥2 источников
-    - или ≥3 повторений одного направления
+    Сколько накоплено в пользу ведущего направления оси.
+
+    До Этапа 2C ось закрывалась по флагу `direct_example` у одного сигнала, а модули
+    ставили этот флаг по одному вхождению подстроки — слово «контролирую» закрывало JP.
+    Теперь решает накопленный вес, число независимых наблюдений и перевес над
+    противоположным полюсом.
     """
+    direction: str | None = None
+    score: float = 0.0                       # сумма confidence по ведущему направлению
+    opposing: float = 0.0                    # сумма confidence по всем остальным
+    signals: int = 0                         # наблюдений в пользу ведущего
+    sources: set[str] = field(default_factory=set)
+    has_direct_example: bool = False
+
+
+def weigh_axis(axis: Axis, evidence: AxisEvidence) -> AxisWeight:
     signals = evidence.for_axis(axis)
     if not signals:
-        return False
+        return AxisWeight()
 
-    if any(s.direct_example for s in signals):
-        return True
-
-    sources = {s.source for s in signals}
-    if len(sources) >= 2:
-        return True
-
-    dir_count: Dict[str, int] = defaultdict(int)
+    by_direction: Dict[str, float] = defaultdict(float)
     for s in signals:
-        dir_count[s.direction] += 1
+        by_direction[s.direction] += s.confidence
 
-    return any(count >= 3 for count in dir_count.values())
+    direction = max(by_direction, key=lambda d: by_direction[d])
+    leading = [s for s in signals if s.direction == direction]
+
+    # Округление обязательно: 0.6 + 0.3 в float даёт 0.8999999999999999, и ось
+    # не закрывалась бы ровно на пороговом наборе сигналов.
+    return AxisWeight(
+        direction=direction,
+        score=round(by_direction[direction], 6),
+        opposing=round(sum(v for d, v in by_direction.items() if d != direction), 6),
+        signals=len(leading),
+        sources={s.source for s in leading},
+        has_direct_example=any(s.direct_example for s in leading),
+    )
+
+
+def _dominates(w: AxisWeight) -> bool:
+    """Ведущее направление должно заметно перевешивать: иначе это не ось, а противоречие."""
+    return w.opposing == 0.0 or w.score >= w.opposing * AXIS_DOMINANCE
+
+
+def axis_is_closed(axis: Axis, evidence: AxisEvidence) -> bool:
+    """
+    Жёсткое закрытие: накоплен вес, наблюдений хватает, они не из одного источника
+    (либо есть настоящий эпизод), и противоположный полюс не спорит.
+    """
+    w = weigh_axis(axis, evidence)
+
+    return (
+        w.score >= AXIS_CLOSE_SCORE
+        and w.signals >= AXIS_MIN_SIGNALS
+        and (len(w.sources) >= 2 or w.has_direct_example)
+        and _dominates(w)
+    )
 
 
 def soft_axis_closed(axis: Axis, evidence: AxisEvidence) -> bool:
     """
-    Мягкое закрытие оси:
-    - ≥2 согласованных сигнала
-    - или прямой + косвенный пример
+    Мягкое закрытие: накопление идёт, но подтверждений ещё мало.
+
+    Условия — подмножество жёстких, поэтому жёстко закрытая ось всегда закрыта и мягко.
+    Раньше было наоборот: `soft` требовал два сигнала, а `axis_is_closed` довольствовался
+    одним с `direct_example`, из-за чего «мягкое» условие оказывалось строже «жёсткого».
     """
-    signals = evidence.for_axis(axis)
+    w = weigh_axis(axis, evidence)
 
-    if len(signals) >= 2:
-        return True
-
-    direct = [s for s in signals if s.direct_example]
-    indirect = [s for s in signals if not s.direct_example]
-
-    return bool(direct and indirect)
+    return (
+        w.score >= AXIS_SOFT_SCORE
+        and w.signals >= AXIS_MIN_SIGNALS
+        and _dominates(w)
+    )
 
 
 # =========================
