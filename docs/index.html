@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neuro — карта энергии (демо)</title>
+<meta name="description" content="Статичное демо витрины Neuro: карта Big Five и разговор об энергии на примерном профиле.">
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --surface: #ffffff;
+    --text: #23201c;
+    --muted: #6f6a63;
+    --border: #e6e1d9;
+    --accent: #b4552d;
+    --grid: #ded8ce;
+    --core: #5c8a52;
+    --unload: #3f7f96;
+    --env: #7a6aa8;
+    --risk: #b4552d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14120f;
+      --surface: #1c1a16;
+      --text: #ece7df;
+      --muted: #9a938a;
+      --border: #2f2b24;
+      --accent: #e08a5c;
+      --grid: #35302a;
+      --core: #86b17a;
+      --unload: #6ba8bd;
+      --env: #a294cd;
+      --risk: #e08a5c;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 0 20px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main { max-width: 560px; margin: 0 auto; }
+
+  /* --- шапка --- */
+
+  header { padding: 40px 0 8px; }
+
+  h1 {
+    margin: 0 0 6px;
+    font-size: 26px;
+    letter-spacing: -0.02em;
+  }
+
+  .tagline { margin: 0; color: var(--muted); }
+
+  .badge {
+    display: inline-block;
+    margin: 20px 0 0;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  /* --- секции --- */
+
+  section { margin-top: 40px; }
+
+  h2 {
+    margin: 0 0 4px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .sub {
+    margin: 0 0 18px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  .card {
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+  }
+
+  /* --- радар --- */
+
+  #radar { display: block; width: 100%; height: auto; }
+  .grid-ring { fill: none; stroke: var(--grid); stroke-width: 1; }
+  .axis-line { stroke: var(--grid); stroke-width: 1; }
+  .shape { fill: var(--accent); fill-opacity: 0.16; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+  .dot { fill: var(--accent); }
+  .axis-label { font-size: 12px; fill: var(--muted); }
+  .axis-value { font-size: 12px; font-weight: 600; fill: var(--text); }
+
+  /* --- черты --- */
+
+  .trait + .trait { margin-top: 20px; }
+
+  .trait-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 7px;
+  }
+
+  .trait-name { font-weight: 600; }
+  .trait-score { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+
+  .track {
+    position: relative;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--grid);
+    overflow: hidden;
+  }
+
+  .fill { height: 100%; background: var(--accent); border-radius: 4px; }
+
+  /* засечки порогов 0.4 и 0.6: между ними черта считается неопределившейся */
+  .tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--surface);
+  }
+
+  .trait-note { margin-top: 6px; font-size: 13px; color: var(--muted); }
+
+  .legend {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* --- четыре буквы --- */
+
+  .letters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .letter {
+    flex: 1;
+    min-width: 0;
+    padding: 14px 6px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    text-align: center;
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .letter.undecided {
+    color: var(--muted);
+    border-style: dashed;
+  }
+
+  .letter small {
+    display: block;
+    margin-top: 6px;
+    font-size: 10px;
+    font-weight: 400;
+    line-height: 1.25;
+    letter-spacing: 0;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .disclaimer { margin: 0; font-size: 13px; color: var(--muted); }
+  .disclaimer + .disclaimer { margin-top: 10px; }
+
+  /* --- ядро и роль --- */
+
+  .split { margin: 0; }
+  .split dt {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .split dd { margin: 6px 0 0; padding: 0; }
+  .split dd + dt { margin-top: 18px; }
+
+  /* --- синтез --- */
+
+  .synthesis p { margin: 0 0 14px; }
+  .synthesis p:last-child { margin-bottom: 0; }
+
+  /* --- блоки энергии --- */
+
+  .energy { display: grid; gap: 14px; }
+
+  .block {
+    padding: 18px 20px;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--tone);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+
+  .block h3 {
+    margin: 0 0 2px;
+    font-size: 15px;
+    color: var(--tone);
+  }
+
+  .block .hint { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+
+  .block ul { margin: 0; padding-left: 20px; }
+  .block li + li { margin-top: 7px; }
+
+  /* --- подвал --- */
+
+  footer {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  footer ul { padding-left: 20px; }
+  footer li + li { margin-top: 8px; }
+
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Neuro</h1>
+  <p class="tagline">Разговор, из которого получается карта личности — и разговор об энергии поверх неё.</p>
+  <p class="badge">Демо. Профиль вымышленный, разговора не было. Числа и текст блоков ниже собраны настоящим кодом проекта, а не написаны под картинку.</p>
+</header>
+
+<section>
+  <h2>Пять черт</h2>
+  <p class="sub">Big&nbsp;Five (OCEAN) — то, что система действительно собирает.</p>
+  <div class="card">
+    <svg id="radar" viewBox="34 8 392 322" role="img" aria-labelledby="radar-title">
+      <title id="radar-title">Радар пяти черт: открытость 0.47, организованность 0.81, экстраверсия 0.27, доброжелательность 0.66, реактивность на стресс 0.72</title>
+    </svg>
+  </div>
+</section>
+
+<section>
+  <h2>Насколько это надёжно</h2>
+  <p class="sub">У каждой черты своя уверенность: одни подтверждены несколькими наблюдениями, другие держатся на одном.</p>
+  <div class="card" id="traits"></div>
+</section>
+
+<section>
+  <h2>Четыре буквы</h2>
+  <p class="sub">Популярная обёртка поверх черт. Не ядро оценки.</p>
+  <div class="card">
+    <div class="letters" id="letters"></div>
+    <p class="disclaimer" id="mbti-disclaimer"></p>
+    <p class="disclaimer"><strong>X&nbsp;— это не ошибка.</strong> Открытость осталась между порогами, и система показывает пробел вместо того, чтобы дожать её до красивого четырёхбуквия.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Ядро и роль</h2>
+  <p class="sub">То, что даётся само, и то, что держится на усилии. Второе стоит считать нагрузкой.</p>
+  <div class="card">
+    <dl class="split" id="core-role"></dl>
+  </div>
+</section>
+
+<section>
+  <h2>Мягкий синтез</h2>
+  <p class="sub">Выдаётся только после явного «да» от человека. Сам по себе не появится.</p>
+  <div class="card synthesis" id="synthesis"></div>
+</section>
+
+<section>
+  <h2>Карта энергии</h2>
+  <p class="sub">Ради чего всё остальное: на что опираться, что разгружать, где копится риск.</p>
+  <div class="energy" id="energy"></div>
+</section>
+
+<footer>
+  <p><strong>Чем это не является.</strong></p>
+  <ul>
+    <li><strong>Это не измерение.</strong> Big&nbsp;Five измеряют валидированными опросниками с нормами на выборке. Здесь языковая модель читает разговор — другой жанр.</li>
+    <li><strong>Результат нестабилен.</strong> Тот же человек в другой день получит другой профиль.</li>
+    <li><strong>Это не диагностика.</strong> Формулировки намеренно вероятностные.</li>
+    <li><strong>Оно отражает то, что вы сами сказали.</strong> Ощущение «надо же, точно про меня» стоит относить скорее к этому, чем к точности метода.</li>
+  </ul>
+  <p>Исходники, разбор находок и открытые вопросы — <a href="https://github.com/ellavsen/Big_Five">github.com/ellavsen/Big_Five</a></p>
+</footer>
+
+</main>
+
+<script>
+// Данные примерного профиля. Получены прогоном настоящих модулей проекта
+// (core.scoring.mbti_from_traits и modules.akme_vector.akme_vector_from_synthesis)
+// на вымышленном результате синтеза — руками здесь ничего не подправлено.
+const PROFILE = {
+  // lines — подпись на радаре: длинные названия ломаются вручную, иначе уезжают за край
+  traits: [
+    { key: "openness",          lines: ["Открытость"],                full: "Открытость опыту",       score: 0.47, confidence: 0.35, stability: "пограничная" },
+    { key: "conscientiousness", lines: ["Добросо-", "вестность"],     full: "Добросовестность",       score: 0.81, confidence: 0.80, stability: "устойчивая" },
+    { key: "extraversion",      lines: ["Экстра-", "версия"],         full: "Экстраверсия",           score: 0.27, confidence: 0.71, stability: "устойчивая" },
+    { key: "agreeableness",     lines: ["Доброже-", "лательность"],   full: "Доброжелательность",     score: 0.66, confidence: 0.54, stability: "пограничная" },
+    { key: "neuroticism",       lines: ["Реактивность", "на стресс"], full: "Реактивность на стресс", score: 0.72, confidence: 0.76, stability: "устойчивая" }
+  ],
+  mbti: {
+    letters: "IXFJ",
+    from: ["экстраверсия", "открытость", "доброжелательность", "добросовестность"],
+    disclaimer: "Четыре буквы — популярная интерпретация поверх Big Five, а не результат измерения. Соответствие приблизительное, и черта «реактивность на стресс» в него вообще не входит."
+  },
+  core_vs_role: {
+    core: ["внимательность к состоянию других", "потребность в предсказуемости"],
+    role: ["контроль за качеством в проекте — держится на усилии, а не даётся само"]
+  },
+  message: [
+    "Судя по разговору, вам заметно легче, когда есть план и понятные рамки: вы несколько раз возвращались к тому, что вечерний список задач снимает тревогу. Похоже, порядок здесь работает не как привычка, а как способ снизить фоновое напряжение.",
+    "Ещё одно наблюдение — про цену. Вы говорили и про сорванный релиз, и про то, что переделывали всё сами, и про то, что усталость к концу недели держится дольше, чем раньше. Это похоже не на нехватку сил, а на режим, в котором восстановление стоит после всего остального.",
+    "И отдельно: контроль за качеством в проекте звучит скорее как роль, которую вы на себя взяли, чем как то, что даётся само. Такие вещи обычно держатся на усилии — и его стоит считать нагрузкой, а не характером."
+  ],
+  akme: {
+    core: [
+      "внимание к деталям, которое другие пропускают",
+      "чередование: конкретика ↔ смыслы (лучше работает в миксе)"
+    ],
+    unload: [
+      "передавать проверку качества, а не перепроверять за всеми",
+      "восстановление через тишину, одиночество, телесные ритуалы",
+      "разгрузка через план + осознанные паузы (не только «ещё немного доделаю»)",
+      "восстановление как обязательная часть плана, а не награда за сделанное"
+    ],
+    environment: [
+      "заранее известные сроки и критерии готовности",
+      "предсказуемая среда без постоянного социального давления",
+      "среда, где ценят эмпатию, поддержку и тонкость общения",
+      "предсказуемость и понятные ожидания заметно снижают фоновую нагрузку"
+    ],
+    risk: [
+      "в ролевом режиме повышаются энергозатраты (есть признаки компенсации/усилия)",
+      "риск перенапряжения из-за контроля и стремления «довести до конца»",
+      "высокая цена стрессовых периодов: усталость накапливается быстрее, чем уходит",
+      "обратить внимание на ранние признаки усталости и профилактику выгорания"
+    ]
+  }
+};
+
+// Пороги те же, что в core/scoring.py: между ними черта считается неопределившейся.
+const HIGH = 0.6;
+const LOW = 0.4;
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function el(name, attrs = {}, text = null) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== null) node.textContent = text;
+  return node;
+}
+
+function drawRadar() {
+  const svg = document.getElementById("radar");
+  const cx = 240, cy = 162, r = 100, labelR = 122;
+  const traits = PROFILE.traits;
+  const step = (Math.PI * 2) / traits.length;
+
+  // угол для i-й черты: первая смотрит вверх
+  const angle = (i) => -Math.PI / 2 + i * step;
+  const point = (i, value) => [
+    cx + Math.cos(angle(i)) * r * value,
+    cy + Math.sin(angle(i)) * r * value
+  ];
+
+  // сетка: кольца по 0.25 и лучи по числу черт
+  for (const ring of [0.25, 0.5, 0.75, 1]) {
+    const pts = traits.map((_, i) => point(i, ring).join(",")).join(" ");
+    svg.appendChild(el("polygon", { points: pts, class: "grid-ring" }));
+  }
+  traits.forEach((_, i) => {
+    const [x, y] = point(i, 1);
+    svg.appendChild(el("line", { x1: cx, y1: cy, x2: x, y2: y, class: "axis-line" }));
+  });
+
+  // сам профиль
+  const shape = traits.map((t, i) => point(i, t.score).join(",")).join(" ");
+  svg.appendChild(el("polygon", { points: shape, class: "shape" }));
+  traits.forEach((t, i) => {
+    const [x, y] = point(i, t.score);
+    svg.appendChild(el("circle", { cx: x, cy: y, r: 3.5, class: "dot" }));
+  });
+
+  // Подписи снаружи. Блок строк ставится относительно точки: над ней, если
+  // подпись в верхней половине, под ней — если в нижней. Иначе многострочные
+  // названия наезжают на фигуру или уходят за край картинки.
+  const LINE = 1.2;
+
+  traits.forEach((t, i) => {
+    const a = angle(i);
+    const x = cx + Math.cos(a) * labelR;
+    const y = cy + Math.sin(a) * labelR;
+    const anchor = Math.abs(x - cx) < 12 ? "middle" : (x > cx ? "start" : "end");
+
+    const rows = t.lines.concat([t.score.toFixed(2)]);
+    const above = y < cy - 5;
+    const first = above ? -(rows.length - 1) * LINE : LINE;
+
+    const label = el("text", { x, y, "text-anchor": anchor, class: "axis-label" });
+    rows.forEach((row, n) => {
+      const isValue = n === rows.length - 1;
+      label.appendChild(el("tspan", {
+        x,
+        dy: (n === 0 ? first : LINE) + "em",
+        class: isValue ? "axis-value" : "axis-label"
+      }, row));
+    });
+    svg.appendChild(label);
+  });
+}
+
+function drawTraits() {
+  const box = document.getElementById("traits");
+
+  for (const t of PROFILE.traits) {
+    const undecided = t.score > LOW && t.score < HIGH;
+    const wrap = document.createElement("div");
+    wrap.className = "trait";
+
+    const head = document.createElement("div");
+    head.className = "trait-head";
+    const name = document.createElement("span");
+    name.className = "trait-name";
+    name.textContent = t.full;
+    const score = document.createElement("span");
+    score.className = "trait-score";
+    score.textContent = t.score.toFixed(2);
+    head.append(name, score);
+
+    const track = document.createElement("div");
+    track.className = "track";
+    const fill = document.createElement("div");
+    fill.className = "fill";
+    fill.style.width = (t.score * 100) + "%";
+    track.append(fill);
+    for (const threshold of [LOW, HIGH]) {
+      const tick = document.createElement("div");
+      tick.className = "tick";
+      tick.style.left = (threshold * 100) + "%";
+      track.append(tick);
+    }
+
+    const note = document.createElement("p");
+    note.className = "trait-note";
+    note.textContent =
+      "уверенность " + t.confidence.toFixed(2) + " · " + t.stability +
+      (undecided ? " · между порогами — направление не определилось" : "");
+
+    wrap.append(head, track, note);
+    box.appendChild(wrap);
+  }
+
+  const legend = document.createElement("div");
+  legend.className = "legend";
+  for (const text of ["0.0 — выражена слабо", "порог 0.4–0.6", "1.0 — выражена сильно"]) {
+    const span = document.createElement("span");
+    span.textContent = text;
+    legend.appendChild(span);
+  }
+  box.appendChild(legend);
+}
+
+function drawMbti() {
+  const box = document.getElementById("letters");
+
+  PROFILE.mbti.letters.split("").forEach((ch, i) => {
+    const cell = document.createElement("div");
+    cell.className = "letter" + (ch === "X" ? " undecided" : "");
+    cell.textContent = ch;
+    const from = document.createElement("small");
+    from.textContent = PROFILE.mbti.from[i];
+    cell.appendChild(from);
+    box.appendChild(cell);
+  });
+
+  document.getElementById("mbti-disclaimer").textContent = PROFILE.mbti.disclaimer;
+}
+
+function drawCoreRole() {
+  const box = document.getElementById("core-role");
+  const parts = [
+    ["Ядро — даётся само", PROFILE.core_vs_role.core],
+    ["Роль — держится на усилии", PROFILE.core_vs_role.role]
+  ];
+
+  for (const [title, items] of parts) {
+    const dt = document.createElement("dt");
+    dt.textContent = title;
+    box.appendChild(dt);
+    for (const item of items) {
+      const dd = document.createElement("dd");
+      dd.textContent = item;
+      box.appendChild(dd);
+    }
+  }
+}
+
+function drawSynthesis() {
+  const box = document.getElementById("synthesis");
+  for (const para of PROFILE.message) {
+    const p = document.createElement("p");
+    p.textContent = para;
+    box.appendChild(p);
+  }
+}
+
+function drawEnergy() {
+  const box = document.getElementById("energy");
+  const blocks = [
+    ["core", "Опоры", "на что можно опираться", "var(--core)"],
+    ["unload", "Разгрузка", "что восстанавливает силы", "var(--unload)"],
+    ["environment", "Среда", "в каких условиях легче", "var(--env)"],
+    ["risk", "Риски", "где копится усталость", "var(--risk)"]
+  ];
+
+  for (const [key, title, hint, tone] of blocks) {
+    const block = document.createElement("section");
+    block.className = "block";
+    block.style.setProperty("--tone", tone);
+
+    const h3 = document.createElement("h3");
+    h3.textContent = title;
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = hint;
+    const ul = document.createElement("ul");
+    for (const item of PROFILE.akme[key]) {
+      const li = document.createElement("li");
+      li.textContent = item;
+      ul.appendChild(li);
+    }
+
+    block.append(h3, p, ul);
+    box.appendChild(block);
+  }
+}
+
+drawRadar();
+drawTraits();
+drawMbti();
+drawCoreRole();
+drawSynthesis();
+drawEnergy();
+</script>
+</body>
+</html>
