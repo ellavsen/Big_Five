@@ -1,0 +1,531 @@
+import os
+import uuid
+import logging
+import tempfile
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+from core.stt import STTClient
+from app.buttons import BASE_KB, AFTER_SYNTH_KB, SYNTH_CONFIRM_KB, VOICE_KB
+from app.formatters import format_akme
+from modules.akme_vector import akme_vector_from_synthesis
+from core.utils import extract_json
+
+from core.orchestrator import Orchestrator
+from core.models import ConversationState
+from core.llm import AsyncLLMClient
+from core.utils import load_text
+
+from core.db.database import get_sessionmaker, init_db
+from core.db.repo import Repo
+from core.db.export import export_session_full
+
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# Простое in-memory хранилище для MVP
+USER_STATES: dict[int, ConversationState] = {}
+
+
+# ----------------------------
+# helpers
+# ----------------------------
+
+def _get_state(user_id: int) -> ConversationState:
+    return USER_STATES.setdefault(user_id, ConversationState())
+
+async def _save_message_to_db(state: ConversationState, role: str, text: str, source: str = "text"):
+    if not state.session_id:
+        return
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        repo = Repo(db)
+        await repo.add_message(uuid.UUID(state.session_id), role=role, text=text, source=source)
+
+async def _ensure_db_session_for_user(state: ConversationState, tg_id: int, username: str | None) -> None:
+    """
+    Гарантирует, что в state есть telegram_id и session_id.
+    Если session_id нет — создаёт новую сессию в БД.
+    """
+    state.telegram_id = tg_id
+
+    if state.session_id:
+        return
+
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        repo = Repo(db)
+        await repo.upsert_user(tg_id, username)
+        sid = await repo.create_session(tg_id)
+        state.session_id = str(sid)
+
+    # если есть поле для дельты — инициализируем
+    if hasattr(state, "last_saved_signals_count"):
+        state.last_saved_signals_count = 0
+
+
+def _signals_payload_from_state(state: ConversationState) -> list[dict]:
+    """
+    Превращает state.evidence.signals в список dict для repo.add_signals()
+    """
+    payload = []
+    for s in getattr(state.evidence, "signals", []):
+        payload.append(
+            {
+                "axis": getattr(s.axis, "value", s.axis),  # Axis enum -> str
+                "direction": s.direction,
+                "confidence": float(s.confidence),
+                "text": s.text,
+                "direct_example": bool(s.direct_example),
+            }
+        )
+    return payload
+
+
+async def _persist_step_state(state: ConversationState) -> None:
+    """
+    Сохраняем в БД:
+    - sessions(validity, saturated)
+    - новые signals
+    """
+    if not state.session_id:
+        return
+
+    sid = uuid.UUID(state.session_id)
+
+    # 1) sessions
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        repo = Repo(db)
+        await repo.touch_session_state(
+            sid,
+            validity_level=state.validity_level,
+            dialogue_saturated=bool(getattr(state, "dialogue_saturated", False)),
+        )
+
+    # 2) signals
+    all_signals = _signals_payload_from_state(state)
+
+    # если есть last_saved_signals_count — пишем только новые
+    if hasattr(state, "last_saved_signals_count"):
+        start_idx = int(getattr(state, "last_saved_signals_count", 0))
+        new_signals = all_signals[start_idx:]
+        state.last_saved_signals_count = len(all_signals)
+    else:
+        # fallback: пишем всё, а дубль отфильтрует UNIQUE + rollback в repo
+        new_signals = all_signals
+
+    if new_signals:
+        SessionMaker = get_sessionmaker()
+        async with SessionMaker() as db:
+            repo = Repo(db)
+            await repo.add_signals(sid, new_signals)
+
+
+async def _persist_synthesis_and_finish(state: ConversationState, synthesis_text: str) -> None:
+    """
+    Сохраняем synthesis + закрываем session.
+    """
+    if not state.session_id:
+        return
+
+    sid = uuid.UUID(state.session_id)
+
+    raw_json = state.synthesis if isinstance(state.synthesis, dict) else None
+    axes_conf = None
+    if isinstance(raw_json, dict):
+        axes_conf = raw_json.get("axes_confidence")
+
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        repo = Repo(db)
+        await repo.save_synthesis(
+            sid,
+            text=synthesis_text,
+            axes_confidence=axes_conf,
+            raw_json=raw_json,
+        )
+        await repo.finish_session(
+            sid,
+            validity_level_end=state.validity_level,
+            dialogue_saturated=bool(getattr(state, "dialogue_saturated", False)),
+            status="finished",
+        )
+
+
+async def _persist_akme(state: ConversationState, recommendations_text: str, vector_json: dict | None) -> None:
+    if not state.session_id:
+        return
+    sid = uuid.UUID(state.session_id)
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        repo = Repo(db)
+        await repo.save_akme(
+            sid,
+            recommendations_text=recommendations_text,
+            vector_json=vector_json,
+        )
+
+
+# ----------------------------
+# handlers
+# ----------------------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    USER_STATES[user_id] = ConversationState()
+
+    tg = update.effective_user
+    state = USER_STATES[user_id]
+
+    # DB: user + session
+    await _ensure_db_session_for_user(state, tg.id, tg.username)
+
+    await update.message.reply_text(
+        "Привет! Я помогу мягко исследовать твой стиль мышления и восстановления.\n"
+        "Можем просто поговорить 🙂",
+        reply_markup=BASE_KB
+    )
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = (update.message.text or "").strip()
+
+    state = _get_state(user_id)
+    orchestrator: Orchestrator = context.bot_data["orchestrator"]
+
+    tg = update.effective_user
+    await _ensure_db_session_for_user(state, tg.id, tg.username)
+
+    # --- КНОПКИ УПРАВЛЕНИЯ ---
+
+    if text == "🔁 Сброс":
+        # закрываем текущую сессию как reset (если была)
+        if state.session_id:
+            sid = uuid.UUID(state.session_id)
+            SessionMaker = get_sessionmaker()
+            async with SessionMaker() as db:
+                repo = Repo(db)
+                await repo.finish_session(
+                    sid,
+                    validity_level_end=state.validity_level,
+                    dialogue_saturated=bool(getattr(state, "dialogue_saturated", False)),
+                    status="reset",
+                )
+
+        USER_STATES[user_id] = ConversationState()
+        state = USER_STATES[user_id]
+        await _ensure_db_session_for_user(state, tg.id, tg.username)
+
+        await update.message.reply_text("Ок! Начнём заново 🙂", reply_markup=BASE_KB)
+        return
+
+    if text == "ℹ️ Помощь":
+        await update.message.reply_text(
+            "Мы просто разговариваем, я аккуратно собираю сигналы.\n"
+            "Когда данных будет достаточно — я сам предложу подвести итог 🙂\n\n"
+            "Команды:\n"
+            "/start — начать\n"
+            "/akme — практические рекомендации (после итога)\n"
+            "/export — выгрузка текущей сессии в Excel\n"
+            "/reset — сброс\n",
+            reply_markup=BASE_KB
+        )
+        return
+    if text == "📝 Показать распознанный текст":
+        if not state.last_transcript:
+            await update.message.reply_text(
+                "Пока нет распознанного текста 🙂 Пришли голосовое сообщение.",
+                reply_markup=BASE_KB
+            )
+            return
+
+        state.awaiting_transcript_fix = True
+        await update.message.reply_text(
+            "Вот что я распознала из аудио:\n\n"
+            f"“{state.last_transcript}”\n\n"
+            "Если хочешь исправить — просто отправь правильный текст следующим сообщением.",
+            reply_markup=BASE_KB
+        )
+        await _save_message_to_db(state, role="user", text=fixed_text, source="transcript_fix")
+        return
+    
+    # --- ПОДТВЕРЖДЕНИЕ ИТОГА ---
+
+    if text == "✅ Подвести итог":
+        state.synthesis_confirmed = True
+
+        response = await orchestrator.step(state, "")
+
+        # сохраняем step state (signals + sessions)
+        await _persist_step_state(state)
+
+        # если orchestration реально вернул синтез — сохраняем synthesis и завершаем session
+        if response.A == "synthesize":
+            await _persist_synthesis_and_finish(state, response.message)
+
+        await update.message.reply_text(response.message, reply_markup=AFTER_SYNTH_KB)
+        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
+        return
+
+    if text == "↩️ Продолжим разговор":
+        state.synthesis_confirmed = False
+        await update.message.reply_text("Хорошо, продолжаем 🙂", reply_markup=BASE_KB)
+        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
+        return
+
+    # --- АКМЕ ---
+
+    if text == "🧭 Практические рекомендации":
+        await akme_cmd(update, context)
+        return
+    
+    if state.awaiting_transcript_fix:
+        state.awaiting_transcript_fix = False
+        fixed_text = text.strip()
+
+        if len(fixed_text) < 2:
+            await update.message.reply_text(
+                "Исправление слишком короткое 🙂 Напиши чуть подробнее.",
+                reply_markup=BASE_KB
+            )
+            return
+
+    # заменяем последний transcript на исправленный
+        state.last_transcript = fixed_text
+
+        response = await orchestrator.step(state, fixed_text)
+
+        if response.A == "synthesize":
+            await update.message.reply_text(response.message, reply_markup=AFTER_SYNTH_KB)
+            return
+
+        await update.message.reply_text(response.message, reply_markup=BASE_KB)
+        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
+        return
+
+    # --- ОСНОВНОЙ ХОД ---
+    # если это обычный текст пользователя — сохраняем
+    await _save_message_to_db(state, role="user", text=text, source="text") 
+    response = await orchestrator.step(state, text)
+
+    # persist after each step
+    await _persist_step_state(state)
+
+    # ЕСЛИ orchestrator спрашивает про итог — показываем кнопки подтверждения
+    if (
+        response.A == "ask"
+        and bool(getattr(state, "dialogue_saturated", False))
+        and not state.synthesis_confirmed
+        and not state.synthesis
+    ):
+        await update.message.reply_text(response.message, reply_markup=SYNTH_CONFIRM_KB)
+        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
+        return
+
+    # ЕСЛИ это синтез — показываем кнопки после итога + сохраняем БД
+    if response.A == "synthesize":
+        await _persist_synthesis_and_finish(state, response.message)
+        await update.message.reply_text(response.message, reply_markup=AFTER_SYNTH_KB)
+        await _save_message_to_db(state, role="assistant", text=response.message, source="system")
+        return
+
+    # ОБЫЧНЫЙ ОТВЕТ
+    await update.message.reply_text(response.message, reply_markup=BASE_KB)
+    await _save_message_to_db(state, role="assistant", text=response.message, source="system")
+
+
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    state = USER_STATES.setdefault(user_id, ConversationState())
+    orchestrator: Orchestrator = context.bot_data["orchestrator"]
+
+    # 1) достаём voice/audio
+    file_id = None
+    if update.message.voice:
+        file_id = update.message.voice.file_id
+    elif update.message.audio:
+        file_id = update.message.audio.file_id
+
+    if not file_id:
+        await update.message.reply_text("Не получилось прочитать аудио 😕", reply_markup=BASE_KB)
+        return
+
+    # 2) скачиваем файл
+    tg_file = await context.bot.get_file(file_id)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_path = os.path.join(tmpdir, "input.ogg")
+        await tg_file.download_to_drive(audio_path)
+
+        # 3) распознаём
+        text = await context.bot_data["stt"].transcribe(audio_path)
+
+    text = (text or "").strip()
+    if len(text) < 2:
+        await update.message.reply_text(
+            "Я почти ничего не расслышала. Можешь повторить чуть громче или подольше? 🙂",
+            reply_markup=BASE_KB
+        )
+        return
+    state.last_transcript = text
+    state.awaiting_transcript_fix = False
+    await _save_message_to_db(state, role="user", text=text, source="voice_transcript")
+    # (опционально) показать распознанный текст
+    # await update.message.reply_text(f"Я услышала так:\n\n{text}", reply_markup=BASE_KB)
+
+    # 4) дальше как обычный текст
+    response = await orchestrator.step(state, text)
+
+    if (
+        response.A == "ask"
+        and state.dialogue_saturated
+        and not state.synthesis_confirmed
+        and not state.synthesis
+    ):
+        await update.message.reply_text(response.message, reply_markup=SYNTH_CONFIRM_KB)
+        return
+
+    if response.A == "synthesize":
+        await update.message.reply_text(response.message, reply_markup=AFTER_SYNTH_KB)
+        return
+    await update.message.reply_text(
+        response.message,
+        reply_markup=VOICE_KB
+    )
+async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    state = _get_state(user_id)
+
+    tg = update.effective_user
+    await _ensure_db_session_for_user(state, tg.id, tg.username)
+
+    if not state.synthesis:
+        await update.message.reply_text(
+            "Пока рано: у меня ещё нет итогового синтеза. "
+            "Давай чуть продолжим разговор — и я подведу итог, после чего появятся рекомендации 🙂",
+            reply_markup=BASE_KB
+        )
+        return
+    
+    synthesis = state.synthesis
+# если synthesis — это обёртка с message внутри (как у тебя сейчас)
+    if isinstance(synthesis, dict) and isinstance(synthesis.get("message"), str):
+        msg = synthesis.get("message")
+        if msg.strip().startswith("```json"):
+            synthesis = extract_json(msg)
+    akme = akme_vector_from_synthesis(state.synthesis)
+    text = format_akme(akme)
+
+    vector_json = akme.model_dump() if hasattr(akme, "model_dump") else (akme if isinstance(akme, dict) else None)
+    await _persist_akme(state, recommendations_text=text, vector_json=vector_json)
+
+    await update.message.reply_text(text, reply_markup=AFTER_SYNTH_KB)
+
+
+async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    state = _get_state(user_id)
+
+    # закрываем текущую сессию как reset (если была)
+    if state.session_id:
+        sid = uuid.UUID(state.session_id)
+        SessionMaker = get_sessionmaker()
+        async with SessionMaker() as db:
+            repo = Repo(db)
+            await repo.finish_session(
+                sid,
+                validity_level_end=state.validity_level,
+                dialogue_saturated=bool(getattr(state, "dialogue_saturated", False)),
+                status="reset",
+            )
+
+    USER_STATES[user_id] = ConversationState()
+    state = USER_STATES[user_id]
+
+    tg = update.effective_user
+    await _ensure_db_session_for_user(state, tg.id, tg.username)
+
+    await update.message.reply_text("Состояние сброшено. Начнём заново 🙂", reply_markup=BASE_KB)
+
+
+async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /export — выгрузка текущей сессии в Excel + CSV.
+    Доступно всем (MVP).
+    """
+    user_id = update.effective_user.id
+    state = _get_state(user_id)
+
+    if not state.session_id:
+        await update.message.reply_text("Нет активной сессии для экспорта. Нажми /start 🙂", reply_markup=BASE_KB)
+        return
+
+    sid = uuid.UUID(state.session_id)
+
+    await update.message.reply_text("Готовлю выгрузку…", reply_markup=BASE_KB)
+
+    SessionMaker = get_sessionmaker()
+    async with SessionMaker() as db:
+        paths = await export_session_full(db, sid, out_dir=f"exports/{state.session_id}")
+
+    xlsx_path = paths["excel"]
+
+    # отправляем Excel
+    try:
+        with open(xlsx_path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename=f"session_{state.session_id}.xlsx",
+                caption="Экспорт сессии (Excel): sessions / signals / synthesis / akme",
+            )
+    except Exception as e:
+        logger.exception("Failed to send export")
+        await update.message.reply_text(f"Не смогла отправить файл: {e}", reply_markup=BASE_KB)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Unhandled exception", exc_info=context.error)
+    # не спамим пользователю деталями, но даём понятный фидбек
+    if isinstance(update, Update) and update.effective_message:
+        await update.effective_message.reply_text(
+            "Ой, у меня произошла внутренняя ошибка 🙈\n"
+            "Попробуй повторить действие или нажми «🔁 Сброс».",
+            reply_markup=BASE_KB
+        )
+
+
+def run_bot():
+    llm = AsyncLLMClient()
+    orchestrator = Orchestrator(
+        llm=llm,
+        turn_planner_prompt=load_text("prompts/turn_planner.md"),
+        synthesizer_prompt=load_text("prompts/synthesizer.md"),
+    )
+
+    app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
+    app.bot_data["orchestrator"] = orchestrator
+    app.bot_data["stt"] = STTClient()
+
+    async def _post_init(application):
+        await init_db()
+
+    app.post_init = _post_init
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("akme", akme_cmd))
+    app.add_handler(CommandHandler("reset", reset_cmd))
+    app.add_handler(CommandHandler("export", export_cmd))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_audio))
+    app.add_error_handler(error_handler)
+
+    app.run_polling()
