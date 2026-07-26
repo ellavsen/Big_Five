@@ -22,3 +22,6 @@ exports/
 
 # os
 .DS_Store
+
+# логи локальных запусков
+logs/
