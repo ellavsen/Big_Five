@@ -623,21 +623,40 @@ async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user
     await _ensure_db_session_for_user(state, tg.id, tg.username)
 
-    if not state.synthesis:
+    # Горячее состояние живёт до перезапуска процесса, а снимок завершённой сессии
+    # мы намеренно затираем — это сырые ПДн. Профиль при этом никуда не девается,
+    # он лежит в таблице synthesis. Без этого запасного пути человек после
+    # перезапуска бота слышал «пока рано» и шёл проходить разговор заново,
+    # хотя его итог был на месте.
+    synthesis = state.synthesis
+    from_previous: datetime | None = None
+
+    if not synthesis:
+        SessionMaker = get_sessionmaker()
+        async with SessionMaker() as db:
+            row = await Repo(db).get_last_profile(tg.id)
+        if row:
+            from_previous, synthesis = row
+
+    if not synthesis:
         await update.message.reply_text(
             "Пока рано: у меня ещё нет итогового синтеза. "
             "Давай чуть продолжим разговор — и я подведу итог, после чего появятся рекомендации 🙂",
             reply_markup=BASE_KB
         )
         return
-    
-    akme = akme_vector_from_synthesis(state.synthesis)
+
+    akme = akme_vector_from_synthesis(synthesis)
     # четыре буквы считаем из черт, а не берём probabilities из ответа модели:
     # ядро — Big Five, и второй источник типа спорил бы с ним
-    scores = TraitScores.model_validate(state.synthesis.get("trait_scores") or {})
+    scores = TraitScores.model_validate(synthesis.get("trait_scores") or {})
     text = format_akme(akme, mbti=mbti_from_traits(scores))
 
-    await _persist_akme(state, recommendations_text=text, vector_json=asdict(akme))
+    if from_previous:
+        text = f"Это итог прошлого разговора, от {from_previous:%d.%m}.\n\n{text}"
+    else:
+        # Сохраняем только свежий разбор: старый уже сохранён в своей сессии.
+        await _persist_akme(state, recommendations_text=text, vector_json=asdict(akme))
 
     await update.message.reply_text(text, reply_markup=AFTER_SYNTH_KB)
 

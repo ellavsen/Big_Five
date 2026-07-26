@@ -24,3 +24,33 @@ jobs:
 
       - name: Tests
         run: pytest -q
+
+  # Dockerfile лежал в репозитории с Этапа 1 и ни разу не собирался: Docker
+  # не установлен на машине разработки. Файл в публичном репозитории — это
+  # обещание «развернуть можно вот так», и непроверенное обещание хуже его
+  # отсутствия. Пусть проверяет GitHub — бесплатно и на каждый пуш.
+  #
+  # Проверяется только сборка образа. Что бот внутри работает, отсюда не следует:
+  # для этого нужны база и ключи.
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t neuro:ci .
+
+      - name: Обе точки входа на месте
+        run: |
+          docker run --rm neuro:ci python -c "import app.main, app.web; print('бот и веб импортируются')"
+
+      # Страница Mini App лежит в docs/ и отдаётся из образа. Если её однажды
+      # исключат из сборки, Mini App сломается молча — только на живом открытии.
+      - name: Страница Mini App попала в образ
+        run: |
+          docker run --rm neuro:ci python -c "
+          from app.web import PAGE
+          assert PAGE.exists(), f'страницы нет в образе: {PAGE}'
+          print('страница на месте:', PAGE)
+          "

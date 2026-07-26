@@ -37,3 +37,102 @@ def test_https_url_gives_a_web_app_button(monkeypatch):
     assert button.web_app is not None, "должна открывать Mini App, а не просто ссылку"
     assert button.web_app.url == "https://example.trycloudflare.com"
     assert "карт" in button.text.lower()
+
+
+# --- /akme после перезапуска бота -----------------------------------------
+
+import pytest as _pytest  # noqa: E402
+
+import app.telegram_bot as bot  # noqa: E402
+from core.models import ConversationState  # noqa: E402
+
+
+class _Msg:
+    def __init__(self):
+        self.replies: list[str] = []
+
+    async def reply_text(self, text, reply_markup=None, parse_mode=None):
+        self.replies.append(text)
+
+
+class _User:
+    id = 4242
+    username = "tester"
+
+
+class _Update:
+    def __init__(self):
+        self.message = _Msg()
+        self.effective_user = _User()
+
+
+PROFILE = {
+    "message": "итог",
+    "trait_scores": {"openness": 0.5, "conscientiousness": 0.73,
+                     "extraversion": 0.5, "agreeableness": 0.5, "neuroticism": 0.66},
+    "core_vs_role": {"core": [], "role": []},
+    "notes": [],
+    "akme_vector": {"core": [], "unload": [], "environment": [], "risk": []},
+}
+
+
+@_pytest.mark.asyncio
+async def test_akme_falls_back_to_the_stored_profile(monkeypatch):
+    """После перезапуска бота горячее состояние пустое, а профиль в базе есть.
+
+    Живой случай: человек нажал «Практические рекомендации» и услышал «пока рано»,
+    хотя три его итога лежали в базе. Снимок завершённой сессии затирается
+    намеренно — значит /akme обязан уметь брать профиль из таблицы.
+    """
+    from datetime import datetime, timezone
+
+    async def _empty_state(user_id):
+        return ConversationState(telegram_id=user_id)
+
+    async def _noop(*a, **kw):
+        return None
+
+    class _Repo:
+        def __init__(self, db):
+            pass
+
+        async def get_last_profile(self, tg_id):
+            return datetime(2026, 7, 26, tzinfo=timezone.utc), PROFILE
+
+    monkeypatch.setattr(bot, "_get_state", _empty_state)
+    monkeypatch.setattr(bot, "_ensure_db_session_for_user", _noop)
+    monkeypatch.setattr(bot, "Repo", _Repo)
+    monkeypatch.delenv("WEBAPP_URL", raising=False)
+
+    update = _Update()
+    await bot.akme_cmd(update, None)
+
+    answer = update.message.replies[0]
+    assert "Пока рано" not in answer
+    assert "прошлого разговора" in answer, "человек должен понимать, что итог не сегодняшний"
+    assert "Практические рекомендации" in answer
+
+
+@_pytest.mark.asyncio
+async def test_akme_still_says_when_there_is_nothing(monkeypatch):
+    async def _empty_state(user_id):
+        return ConversationState(telegram_id=user_id)
+
+    async def _noop(*a, **kw):
+        return None
+
+    class _Repo:
+        def __init__(self, db):
+            pass
+
+        async def get_last_profile(self, tg_id):
+            return None
+
+    monkeypatch.setattr(bot, "_get_state", _empty_state)
+    monkeypatch.setattr(bot, "_ensure_db_session_for_user", _noop)
+    monkeypatch.setattr(bot, "Repo", _Repo)
+
+    update = _Update()
+    await bot.akme_cmd(update, None)
+
+    assert "Пока рано" in update.message.replies[0]
