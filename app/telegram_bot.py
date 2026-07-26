@@ -50,6 +50,11 @@ HELP_TEXT = (
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# httpx на INFO печатает полный URL запроса, а токен бота у Telegram лежит прямо
+# в пути: /bot<ТОКЕН>/getUpdates. То есть любой лог, приложенный к issue или
+# отправленный в поддержку, отдавал вместе с собой полный доступ к боту.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # Горячий кэш активных диалогов. Долговременное хранилище — sessions.state_json,
 # отсюда состояние можно выбрасывать: _get_state поднимет его обратно из БД.
 USER_STATES: dict[int, ConversationState] = {}

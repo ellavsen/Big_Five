@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 import app.telegram_bot as bot
+from core.coverage import plan_turn_goal
 from core.models import ConversationState, PreviousProfile, SynthesisResult, TraitScores
 from core.orchestrator import Orchestrator
 from tests.fakes import FakeLLM
@@ -67,7 +68,8 @@ async def test_previous_profile_reaches_both_prompts():
         notes=["восстанавливается в одиночестве"],
     )
 
-    for prompt in (orch._build_turn_prompt(state), orch._build_synthesis_prompt(state)):
+    turn_prompt = orch._build_turn_prompt(state, plan_turn_goal(state))
+    for prompt in (turn_prompt, orch._build_synthesis_prompt(state)):
         ctx = json.loads(prompt.split("\n", 1)[1].strip().splitlines()[-1])
         assert ctx["previous_profile"]["finished_at"] == "2026-03-14"
         assert ctx["previous_profile"]["trait_scores"]["neuroticism"] == 0.7
@@ -77,8 +79,9 @@ async def test_previous_profile_reaches_both_prompts():
 async def test_prompts_say_it_is_a_first_conversation_when_there_is_no_memory():
     orch = Orchestrator(FakeLLM(), turn_planner_prompt="TURN", synthesizer_prompt="SYNTH")
 
+    empty = ConversationState()
     ctx = json.loads(
-        orch._build_turn_prompt(ConversationState()).split("\n", 1)[1].strip().splitlines()[-1]
+        orch._build_turn_prompt(empty, plan_turn_goal(empty)).split("\n", 1)[1].strip().splitlines()[-1]
     )
     assert ctx["previous_profile"] is None
 

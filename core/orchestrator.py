@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict
 
 from core.models import ConversationState, AgentResponse, Trait
+from core.coverage import TurnGoal, plan_turn_goal, register_turn_goal
 from core.llm import AsyncLLMClient
 from core.validity import (
     update_validity_from_text,
@@ -14,6 +15,7 @@ from core.validity import (
     is_profile_sufficient,
     weigh_trait,
 )
+from core.scoring import trait_scores_from_evidence
 from core.transitions import choose_agent, choose_priority_goal
 from core.config import STRICT_MODE, STRICT_VL_THRESHOLD
 from core.utils import serialize_trait_evidence
@@ -189,6 +191,12 @@ class Orchestrator:
             user_prompt = self._build_synthesis_prompt(state)
             result = await self.llm.synthesize(self.synthesizer_prompt, user_prompt)
 
+            # Числа профиля считает код, а не модель. Те же значения уже ушли
+            # в промпт, но полагаться на дисциплину модели тут нельзя: на живом
+            # диалоге она проставила все пять черт высокими, включая те, где было
+            # ровно одно наблюдение. Модель отвечает за текст, шкала — за шкалу.
+            result.trait_scores = trait_scores_from_evidence(state.evidence)
+
             state.add_assistant(result.message)
             # result.message — связный текст для человека, а вся структура уже разобрана
             # в SynthesisResult: trait_scores / core_vs_role / akme_vector нужны /akme
@@ -218,9 +226,12 @@ class Orchestrator:
         state.chosen_agent = agent
         state.reason = reason
 
-        # 7) act: один планирующий вызов LLM
-        user_prompt = self._build_turn_prompt(state)
+        # 7) act: один планирующий вызов LLM.
+        # Тему хода выбирает код, модель отвечает за живую формулировку.
+        goal = plan_turn_goal(state)
+        user_prompt = self._build_turn_prompt(state, goal)
         plan = await self.llm.plan_turn(self.turn_planner_prompt, user_prompt)
+        register_turn_goal(state, goal)
 
         if state.chosen_agent == "interpreter":
             plan.A = "interpret"
@@ -254,7 +265,37 @@ class Orchestrator:
             message=plan.message,
         )
 
-    def _build_turn_prompt(self, state: ConversationState) -> str:
+    def _turn_goal_instruction(self, goal: TurnGoal) -> str:
+        """Цель хода словами, а не ключом в JSON.
+
+        Раньше подсказка «по этой черте ноль наблюдений» лежала внутри большого
+        объекта состояния, и модель её стабильно проигрывала остальным правилам.
+        Приказ перед данными — единственное размещение, которое сработало.
+        """
+        if goal.mode == "opening":
+            return (
+                "ЦЕЛЬ ХОДА: разговор только начинается. Поздоровайся одной фразой "
+                "и задай лёгкий открытый вопрос о том, как идёт день."
+            )
+
+        if goal.mode == "follow_up":
+            return (
+                "ЦЕЛЬ ХОДА: углубись в то, что человек только что рассказал.\n"
+                "Один вопрос про конкретную деталь его рассказа — про случай, а не про него самого.\n"
+                "Новую тему не начинай."
+            )
+
+        return (
+            "ЦЕЛЬ ХОДА: перевести разговор на новую житейскую ситуацию.\n"
+            f"Ситуация: «{goal.probe.question}»\n\n"
+            "Как задать:\n"
+            "— сначала одна короткая фраза-связка с тем, что человек сказал сейчас;\n"
+            "— потом сам вопрос, своими словами и на «ты».\n"
+            "Ситуацию менять нельзя, формулировку — можно и нужно.\n"
+            "Не предлагай вариантов ответа и не называй, что именно ты замечаешь."
+        )
+
+    def _build_turn_prompt(self, state: ConversationState, goal: TurnGoal) -> str:
         history_for_llm = [{"role": m.role, "content": m.content} for m in state.history[-12:]]
         ev = serialize_trait_evidence(state.evidence)
         g = state.goals
@@ -279,10 +320,15 @@ class Orchestrator:
             "notes_tail": state.notes[-8:],
             "evidence_compact": ev,
             "history": history_for_llm,
+            # Вопросы, которые бот уже задавал: без явного списка модель
+            # перефразировала свой же вопрос через пять ходов и спрашивала то же самое.
+            "already_asked": [
+                m.content for m in state.history if m.role == "assistant"
+            ][-4:],
         }
 
         return (
-            "Сформируй следующий ход живого диалога.\n\n"
+            f"{self._turn_goal_instruction(goal)}\n\n"
             "Контекст состояния (state):\n"
             f"{json.dumps(ctx, ensure_ascii=False)}\n"
         )
@@ -317,6 +363,9 @@ class Orchestrator:
         ctx = {
             "strict_mode": strict_hint,
             "deterministic_profile": det_profile,
+            # Готовые числа профиля. Модель не оценивает выраженность черт — она
+            # получает посчитанное и пишет текст вокруг него. 0.5 = данных не хватило.
+            "trait_scores": trait_scores_from_evidence(state.evidence).model_dump(),
             "trait_weights": weights,
             "validity_level": state.validity_level,
             "goals": {"ctx": g.ctx, "sig": g.sig, "val": g.val, "map": g.map, "sum": g.sum},

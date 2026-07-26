@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from core.coverage import plan_turn_goal
 from core.models import ConversationState, Direction, SynthesisResult, Trait, TraitSignal
 from core.orchestrator import Orchestrator
 from tests.fakes import FakeLLM
@@ -41,7 +42,8 @@ async def test_prompt_context_is_valid_json():
     state.add_note("energy:depletion")
     await orch.step(state, "вчера был тяжёлый день, я устала")
 
-    for prompt in (orch._build_turn_prompt(state), orch._build_synthesis_prompt(state)):
+    turn_prompt = orch._build_turn_prompt(state, plan_turn_goal(state))
+    for prompt in (turn_prompt, orch._build_synthesis_prompt(state)):
         payload = prompt.split("\n", 1)[1].strip().splitlines()[-1]
         ctx = json.loads(payload)  # упадёт на repr-е
         assert set(ctx["trait_closed"]) == {t.value for t in Trait}
@@ -68,11 +70,14 @@ async def test_synthesis_saves_structured_dict():
 
     assert resp.A == "synthesize"
     assert resp.message == "Тёплый связный текст"
-    # черты с фиксированными ключами: незаданные приходят нейтральными 0.5
-    assert state.synthesis["trait_scores"]["extraversion"] == 0.3
-    assert state.synthesis["trait_scores"]["neuroticism"] == 0.5
     assert state.synthesis["core_vs_role"]["role"] == ["контроль"]
+    assert state.synthesis["akme_vector"]["unload"] == ["избыточный контроль"]
     assert state.dialogue_completed is True
+
+    # А вот числа профиля от модели не берутся: она прислала extraversion 0.3,
+    # но наблюдений в состоянии нет — значит 0.5, «данных не хватило».
+    assert state.synthesis["trait_scores"]["extraversion"] == 0.5
+    assert state.synthesis["trait_scores"]["neuroticism"] == 0.5
 
 
 @pytest.mark.asyncio

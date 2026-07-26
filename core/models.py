@@ -86,12 +86,42 @@ class ChatMessage(BaseModel):
     content: str
 
 
-class TurnPlan(BaseModel):
+class TraitScan(BaseModel):
+    """
+    Обязательный проход по всем пяти чертам перед записью наблюдений.
+
+    По строке на черту: что в последней реплике было про неё, или «—», если ничего.
+    Прочерк разрешён намеренно — иначе модель начнёт придумывать под квоту, а
+    выдуманное наблюдение хуже пропущенного.
+
+    Поле служебное, никуда дальше не идёт. Смысл в том, что модель обязана
+    произнести все пять, прежде чем что-то записать: без этого прохода богатый
+    рассказ про ссору и примирение давал одно наблюдение вместо трёх.
+    """
     model_config = ConfigDict(extra="forbid")
 
+    # Дефолты нужны только fallback-пути в core/llm.py и тестам: в strict-схеме
+    # все поля всё равно обязательны, и модель отдаёт их целиком.
+    openness: str = "—"
+    conscientiousness: str = "—"
+    extraversion: str = "—"
+    agreeableness: str = "—"
+    neuroticism: str = "—"
+
+
+class TurnPlan(BaseModel):
+    """
+    Порядок полей значим. Модель заполняет их сверху вниз, и написанное раньше
+    определяет написанное позже. Пока `message` стоял первым, планировщик сочинял
+    вопрос, а наблюдения дописывал по остаточному принципу: богатый рассказ про
+    ссору и примирение давал ноль наблюдений. Сначала слушать, потом спрашивать.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    scan: TraitScan = Field(default_factory=TraitScan)
+    trait_signals: List[TraitSignal] = []
     A: Literal["ask", "interpret"]
     message: str
-    trait_signals: List[TraitSignal] = []
 
 
 # =========================
@@ -230,6 +260,11 @@ class ConversationState(BaseModel):
     map_turns: int = 0
     last_transcript: str | None = None
     awaiting_transcript_fix: bool = False
+    # Какие житейские ситуации уже спрашивали и сколько ходов держимся текущей.
+    # Тему хода выбирает код (core/coverage.py), а не модель: оставленный сам по
+    # себе планировщик отзеркаливал тему собеседника и ходил по кругу.
+    used_probes: List[str] = Field(default_factory=list)
+    probe_turns: int = 0
     synthesis: dict | None = None
     # профиль из прошлого разговора, если он был
     previous_profile: PreviousProfile | None = None

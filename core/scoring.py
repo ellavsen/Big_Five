@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.models import TraitScores
+from core.config import (
+    TRAIT_FULL_EVIDENCE,
+    TRAIT_MAX_DEVIATION,
+    TRAIT_MIN_SIGNALS,
+)
+from core.models import Direction, Trait, TraitEvidence, TraitScores
+from core.validity import weigh_trait
 
 # Порог, при котором черта считается выраженной. Между порогами — «не определилось»,
 # и мы честно показываем X вместо того, чтобы дожимать до буквы.
@@ -33,6 +39,40 @@ DISCLAIMER = (
     "измерения. Соответствие приблизительное, и черта «реактивность на стресс» "
     "в него вообще не входит."
 )
+
+
+UNKNOWN = 0.5
+
+
+def trait_value(trait: Trait, evidence: TraitEvidence) -> float:
+    """Выраженность черты 0..1, посчитанная из накопленных наблюдений.
+
+    0.5 означает «данных не хватило», и это не фигура речи: пока наблюдений
+    меньше `TRAIT_MIN_SIGNALS`, черта остаётся ровно посередине. Раньше оценку
+    ставила модель, и она серединой не пользовалась — одно наблюдение давало 0.70,
+    то есть «выражена». Все пять черт выходили высокими: профиль, который приятно
+    читать и по которому ничего нельзя решить.
+
+    Считается по перевесу ведущего направления над противоположным: два
+    противоречащих друг другу наблюдения оставляют черту у середины, а не
+    складываются в уверенность.
+    """
+    weight = weigh_trait(trait, evidence)
+
+    if weight.direction is None or weight.signals < TRAIT_MIN_SIGNALS:
+        return UNKNOWN
+
+    net = max(0.0, weight.score - weight.opposing)
+    strength = min(1.0, net / TRAIT_FULL_EVIDENCE)
+    shift = TRAIT_MAX_DEVIATION * strength
+
+    value = UNKNOWN + shift if weight.direction is Direction.HIGH else UNKNOWN - shift
+    return round(value, 2)
+
+
+def trait_scores_from_evidence(evidence: TraitEvidence) -> TraitScores:
+    """Все пять черт разом. Единственный источник чисел в профиле."""
+    return TraitScores(**{t.value: trait_value(t, evidence) for t in Trait})
 
 
 @dataclass
