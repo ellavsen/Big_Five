@@ -257,7 +257,7 @@
 <header>
   <h1>Neuro</h1>
   <p class="tagline">Разговор, из которого получается карта личности — и разговор об энергии поверх неё.</p>
-  <p class="badge">Демо. Профиль вымышленный, разговора не было. Числа и текст блоков ниже собраны настоящим кодом проекта, а не написаны под картинку.</p>
+  <p class="badge" id="badge">Демо. Профиль вымышленный, разговора не было. Числа и текст блоков ниже собраны настоящим кодом проекта, а не написаны под картинку.</p>
 </header>
 
 <section>
@@ -265,7 +265,7 @@
   <p class="sub">Big&nbsp;Five (OCEAN) — то, что система действительно собирает.</p>
   <div class="card">
     <svg id="radar" viewBox="34 8 392 322" role="img" aria-labelledby="radar-title">
-      <title id="radar-title">Радар пяти черт: открытость 0.47, организованность 0.81, экстраверсия 0.27, доброжелательность 0.66, реактивность на стресс 0.72</title>
+      <title id="radar-title">Радар пяти черт</title>
     </svg>
   </div>
 </section>
@@ -282,7 +282,7 @@
   <div class="card">
     <div class="letters" id="letters"></div>
     <p class="disclaimer" id="mbti-disclaimer"></p>
-    <p class="disclaimer"><strong>X&nbsp;— это не ошибка.</strong> Открытость осталась между порогами, и система показывает пробел вместо того, чтобы дожать её до красивого четырёхбуквия.</p>
+    <p class="disclaimer" id="mbti-undecided" hidden></p>
   </div>
 </section>
 
@@ -320,21 +320,40 @@
 </main>
 
 <script>
-// Данные примерного профиля. Получены прогоном настоящих модулей проекта
-// (core.scoring.mbti_from_traits и modules.akme_vector.akme_vector_from_synthesis)
-// на вымышленном результате синтеза — руками здесь ничего не подправлено.
-const PROFILE = {
-  // lines — подпись на радаре: длинные названия ломаются вручную, иначе уезжают за край
+// Страница работает в двух режимах и намеренно живёт одним файлом.
+//
+//   открыта внутри Telegram  → тянет профиль человека через /api/profile
+//   открыта в браузере       → показывает демо-профиль, который лежит ниже
+//
+// Копии нет, потому что копия разошлась бы с оригиналом при первой же правке:
+// витрина на GitHub Pages и живой Mini App — это буквально один и тот же файл.
+
+// Подписи на радаре: длинные названия ломаются вручную, иначе уезжают за край.
+// Чистая презентация, поэтому живёт здесь, а не приходит с сервера.
+const RADAR_LINES = {
+  openness: ["Открытость"],
+  conscientiousness: ["Добросо-", "вестность"],
+  extraversion: ["Экстра-", "версия"],
+  agreeableness: ["Доброже-", "лательность"],
+  neuroticism: ["Реактивность", "на стресс"]
+};
+
+// Демо-профиль. Форма — ровно та, что отдаёт /api/profile, чтобы обе ветки
+// рендерились одним кодом. Числа и текст блоков получены прогоном настоящих
+// модулей проекта (core.scoring и modules.akme_vector) на вымышленном синтезе.
+const DEMO_PROFILE = {
+  finished_at: "2026-07-20T12:30:00+00:00",
   traits: [
-    { key: "openness",          lines: ["Открытость"],                full: "Открытость опыту",       score: 0.47, confidence: 0.35, stability: "пограничная" },
-    { key: "conscientiousness", lines: ["Добросо-", "вестность"],     full: "Добросовестность",       score: 0.81, confidence: 0.80, stability: "устойчивая" },
-    { key: "extraversion",      lines: ["Экстра-", "версия"],         full: "Экстраверсия",           score: 0.27, confidence: 0.71, stability: "устойчивая" },
-    { key: "agreeableness",     lines: ["Доброже-", "лательность"],   full: "Доброжелательность",     score: 0.66, confidence: 0.54, stability: "пограничная" },
-    { key: "neuroticism",       lines: ["Реактивность", "на стресс"], full: "Реактивность на стресс", score: 0.72, confidence: 0.76, stability: "устойчивая" }
+    { key: "openness",          title: "Открытость опыту",       score: 0.47, confidence: 0.35, stability: "пограничная" },
+    { key: "conscientiousness", title: "Добросовестность",       score: 0.81, confidence: 0.80, stability: "устойчивая" },
+    { key: "extraversion",      title: "Экстраверсия",           score: 0.27, confidence: 0.71, stability: "устойчивая" },
+    { key: "agreeableness",     title: "Доброжелательность",     score: 0.66, confidence: 0.54, stability: "пограничная" },
+    { key: "neuroticism",       title: "Реактивность на стресс", score: 0.72, confidence: 0.76, stability: "устойчивая" }
   ],
   mbti: {
     letters: "IXFJ",
-    from: ["экстраверсия", "открытость", "доброжелательность", "добросовестность"],
+    is_complete: false,
+    sources: ["экстраверсия", "открытость", "доброжелательность", "добросовестность"],
     disclaimer: "Четыре буквы — популярная интерпретация поверх Big Five, а не результат измерения. Соответствие приблизительное, и черта «реактивность на стресс» в него вообще не входит."
   },
   core_vs_role: {
@@ -376,6 +395,7 @@ const PROFILE = {
 // Пороги те же, что в core/scoring.py: между ними черта считается неопределившейся.
 const HIGH = 0.6;
 const LOW = 0.4;
+const UNKNOWN = 0.5;
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -386,10 +406,14 @@ function el(name, attrs = {}, text = null) {
   return node;
 }
 
-function drawRadar() {
+function drawRadar(profile) {
   const svg = document.getElementById("radar");
+  // Подпись для скринридера — из данных, иначе она врёт при живом профиле.
+  document.getElementById("radar-title").textContent =
+    "Радар пяти черт: " + profile.traits.map((t) => `${t.title.toLowerCase()} ${t.score.toFixed(2)}`).join(", ");
+
   const cx = 240, cy = 162, r = 100, labelR = 122;
-  const traits = PROFILE.traits;
+  const traits = profile.traits;
   const step = (Math.PI * 2) / traits.length;
 
   // угол для i-й черты: первая смотрит вверх
@@ -428,7 +452,7 @@ function drawRadar() {
     const y = cy + Math.sin(a) * labelR;
     const anchor = Math.abs(x - cx) < 12 ? "middle" : (x > cx ? "start" : "end");
 
-    const rows = t.lines.concat([t.score.toFixed(2)]);
+    const rows = (RADAR_LINES[t.key] || [t.title]).concat([t.score.toFixed(2)]);
     const above = y < cy - 5;
     const first = above ? -(rows.length - 1) * LINE : LINE;
 
@@ -445,10 +469,10 @@ function drawRadar() {
   });
 }
 
-function drawTraits() {
+function drawTraits(profile) {
   const box = document.getElementById("traits");
 
-  for (const t of PROFILE.traits) {
+  for (const t of profile.traits) {
     const undecided = t.score > LOW && t.score < HIGH;
     const wrap = document.createElement("div");
     wrap.className = "trait";
@@ -457,7 +481,7 @@ function drawTraits() {
     head.className = "trait-head";
     const name = document.createElement("span");
     name.className = "trait-name";
-    name.textContent = t.full;
+    name.textContent = t.title;
     const score = document.createElement("span");
     score.className = "trait-score";
     score.textContent = t.score.toFixed(2);
@@ -496,27 +520,41 @@ function drawTraits() {
   box.appendChild(legend);
 }
 
-function drawMbti() {
+function drawMbti(profile) {
   const box = document.getElementById("letters");
 
-  PROFILE.mbti.letters.split("").forEach((ch, i) => {
+  profile.mbti.letters.split("").forEach((ch, i) => {
     const cell = document.createElement("div");
     cell.className = "letter" + (ch === "X" ? " undecided" : "");
     cell.textContent = ch;
     const from = document.createElement("small");
-    from.textContent = PROFILE.mbti.from[i];
+    from.textContent = profile.mbti.sources[i];
     cell.appendChild(from);
     box.appendChild(cell);
   });
 
-  document.getElementById("mbti-disclaimer").textContent = PROFILE.mbti.disclaimer;
+  document.getElementById("mbti-disclaimer").textContent = profile.mbti.disclaimer;
+
+  // Пояснение про X показываем только когда X действительно есть: у полного
+  // четырёхбуквия оно читалось бы как оговорка на пустом месте.
+  const undecided = profile.traits.filter((t) => t.score === UNKNOWN).map((t) => t.title.toLowerCase());
+  const note = document.getElementById("mbti-undecided");
+  if (profile.mbti.letters.includes("X")) {
+    note.hidden = false;
+    note.innerHTML =
+      "<strong>X — это не ошибка.</strong> " +
+      (undecided.length ? `Разговор не набрал материала: ${undecided.join(", ")}. ` : "Черта осталась между порогами. ") +
+      "Система показывает пробел вместо того, чтобы дожать букву до красивого четырёхбуквия.";
+  } else {
+    note.hidden = true;
+  }
 }
 
-function drawCoreRole() {
+function drawCoreRole(profile) {
   const box = document.getElementById("core-role");
   const parts = [
-    ["Ядро — даётся само", PROFILE.core_vs_role.core],
-    ["Роль — держится на усилии", PROFILE.core_vs_role.role]
+    ["Ядро — даётся само", profile.core_vs_role.core],
+    ["Роль — держится на усилии", profile.core_vs_role.role]
   ];
 
   for (const [title, items] of parts) {
@@ -531,16 +569,16 @@ function drawCoreRole() {
   }
 }
 
-function drawSynthesis() {
+function drawSynthesis(profile) {
   const box = document.getElementById("synthesis");
-  for (const para of PROFILE.message) {
+  for (const para of profile.message) {
     const p = document.createElement("p");
     p.textContent = para;
     box.appendChild(p);
   }
 }
 
-function drawEnergy() {
+function drawEnergy(profile) {
   const box = document.getElementById("energy");
   const blocks = [
     ["core", "Опоры", "на что можно опираться", "var(--core)"],
@@ -560,7 +598,7 @@ function drawEnergy() {
     p.className = "hint";
     p.textContent = hint;
     const ul = document.createElement("ul");
-    for (const item of PROFILE.akme[key]) {
+    for (const item of profile.akme[key]) {
       const li = document.createElement("li");
       li.textContent = item;
       ul.appendChild(li);
@@ -571,12 +609,89 @@ function drawEnergy() {
   }
 }
 
-drawRadar();
-drawTraits();
-drawMbti();
-drawCoreRole();
-drawSynthesis();
-drawEnergy();
+// --- два режима -----------------------------------------------------------
+
+function render(profile) {
+  drawRadar(profile);
+  drawTraits(profile);
+  drawMbti(profile);
+  drawCoreRole(profile);
+  drawSynthesis(profile);
+  drawEnergy(profile);
+}
+
+function setBadge(text) {
+  document.getElementById("badge").textContent = text;
+}
+
+function showOnlyMessage(text) {
+  for (const node of document.querySelectorAll("main > section")) {
+    node.remove();
+  }
+  setBadge(text);
+}
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+}
+
+function unknownTraits(profile) {
+  return profile.traits.filter((t) => t.score === UNKNOWN).map((t) => t.title.toLowerCase());
+}
+
+async function loadLiveProfile(initData) {
+  // initData уходит заголовком, а не в адресе: адреса оседают в логах прокси,
+  // в истории браузера и в Referer. Подписанной строке там не место.
+  const response = await fetch("/api/profile", {
+    headers: { "X-Telegram-Init-Data": initData }
+  });
+
+  if (response.status === 401) {
+    throw new Error("Не удалось подтвердить, что это ты. Открой карту заново из бота.");
+  }
+  if (response.status === 404) {
+    throw new Error("Профиля пока нет. Сначала пройди разговор в боте и попроси подвести итог.");
+  }
+  if (!response.ok) {
+    throw new Error("Что-то пошло не так. Попробуй открыть карту чуть позже.");
+  }
+  return response.json();
+}
+
+async function boot() {
+  const telegram = window.Telegram && window.Telegram.WebApp;
+  const initData = telegram && telegram.initData;
+
+  if (telegram && telegram.ready) {
+    telegram.ready();
+    if (telegram.expand) telegram.expand();
+  }
+
+  // Нет подписи — значит страницу открыли не из Telegram. Это витрина.
+  if (!initData) {
+    render(DEMO_PROFILE);
+    return;
+  }
+
+  try {
+    const profile = await loadLiveProfile(initData);
+    render(profile);
+
+    const date = formatDate(profile.finished_at);
+    const missing = unknownTraits(profile);
+    setBadge(
+      "Твоя карта" + (date ? ` от ${date}` : "") + ". " +
+      (missing.length
+        ? `Разговор не набрал материала по чертам: ${missing.join(", ")} — они стоят посередине, это честное «не знаем».`
+        : "Все пять черт набрали достаточно наблюдений.")
+    );
+  } catch (error) {
+    showOnlyMessage(error.message);
+  }
+}
+
+boot();
 </script>
 </body>
 </html>

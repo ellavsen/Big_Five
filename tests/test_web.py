@@ -124,3 +124,36 @@ def test_raw_conversation_never_leaves_the_server(client, loaded):
     assert "notes" not in body
     assert "probabilities" not in body
     assert "устал к концу недели" not in r.text, "заметки — сырой материал, наружу им не надо"
+
+
+# --- страница Mini App ----------------------------------------------------
+
+def test_page_is_served_at_root(client):
+    r = client.get("/")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "Neuro" in r.text
+
+
+def test_page_is_the_same_file_as_the_showcase():
+    """Витрина на Pages и Mini App — один файл. Копия разошлась бы при первой правке."""
+    from pathlib import Path
+
+    import app.web as web
+
+    assert web.PAGE == Path(web.__file__).resolve().parent.parent / "docs" / "index.html"
+    assert web.PAGE.exists()
+
+
+def test_page_is_not_cached(client):
+    """По странице сразу уходит запрос за профилем — незачем оставлять её в кэше."""
+    assert client.get("/").headers["cache-control"] == "no-store"
+
+
+def test_page_asks_for_the_profile_with_a_header(client):
+    """initData не должна попадать в адрес: адреса оседают в логах и в Referer."""
+    body = client.get("/").text
+
+    assert "X-Telegram-Init-Data" in body
+    assert "/api/profile?" not in body

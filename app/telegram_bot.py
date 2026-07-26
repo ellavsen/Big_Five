@@ -6,7 +6,13 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pydantic import ValidationError
-from telegram import ReplyKeyboardRemove, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+    WebAppInfo,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -634,6 +640,33 @@ async def akme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _persist_akme(state, recommendations_text=text, vector_json=asdict(akme))
 
     await update.message.reply_text(text, reply_markup=AFTER_SYNTH_KB)
+
+    # Отдельным сообщением: у одного сообщения может быть только одна клавиатура,
+    # а AFTER_SYNTH_KB нужна на месте.
+    keyboard = webapp_keyboard()
+    if keyboard:
+        await update.message.reply_text(
+            "Ту же карту можно посмотреть целиком — с радаром черт и блоками энергии.",
+            reply_markup=keyboard,
+        )
+
+
+def webapp_keyboard() -> InlineKeyboardMarkup | None:
+    """Кнопка «открыть карту», если веб-сервис где-то поднят.
+
+    Адрес приходит из окружения и обязан быть HTTPS — Telegram другие не открывает.
+    Без `WEBAPP_URL` кнопки просто нет: бот полностью работоспособен и без неё,
+    а вести человека на несуществующую страницу хуже, чем не звать вовсе.
+    """
+    url = os.getenv("WEBAPP_URL", "").strip()
+    if not url.startswith("https://"):
+        if url:
+            logger.warning("WEBAPP_URL должен начинаться с https:// — кнопка Mini App скрыта")
+        return None
+
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🗺 Открыть карту", web_app=WebAppInfo(url=url))]]
+    )
 
 
 async def delete_me_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

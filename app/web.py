@@ -17,8 +17,11 @@ from __future__ import annotations
 import logging
 import os
 
+from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.webapp_auth import InitDataError, verify_init_data
@@ -81,6 +84,19 @@ class ProfileOut(BaseModel):
 
 
 app = FastAPI(title="Neuro Mini App", docs_url=None, redoc_url=None)
+
+# Витрина на GitHub Pages и Mini App — это один и тот же файл. Страница сама
+# понимает, где её открыли: есть подпись Telegram — тянет профиль через API,
+# нет — показывает демо-профиль. Копии нет, потому что копия разошлась бы
+# с оригиналом при первой же правке.
+PAGE = Path(__file__).resolve().parent.parent / "docs" / "index.html"
+
+
+@app.get("/", include_in_schema=False)
+async def page() -> FileResponse:
+    # no-store: страница сама по себе публичная, но по ней сразу уходит запрос
+    # за профилем, и незачем оставлять её в кэше на чужом устройстве.
+    return FileResponse(PAGE, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-store"})
 
 
 def _authenticate(init_data: str) -> int:
