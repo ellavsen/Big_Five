@@ -66,6 +66,25 @@ class _Update:
         self.effective_user = _User()
 
 
+class _FakeSession:
+    """Подменяет сессию к базе: до неё дело всё равно не доходит, Repo подменён.
+
+    Без этой подмены тест звал настоящий get_sessionmaker(), и локально это
+    проходило только потому, что DATABASE_URL подтягивался из .env. На CI
+    переменной нет — и тест падал. Ровно то, ради чего CI и нужен.
+    """
+
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _fake_sessionmaker():
+    return _FakeSession
+
+
 PROFILE = {
     "message": "итог",
     "trait_scores": {"openness": 0.5, "conscientiousness": 0.73,
@@ -102,6 +121,7 @@ async def test_akme_falls_back_to_the_stored_profile(monkeypatch):
     monkeypatch.setattr(bot, "_get_state", _empty_state)
     monkeypatch.setattr(bot, "_ensure_db_session_for_user", _noop)
     monkeypatch.setattr(bot, "Repo", _Repo)
+    monkeypatch.setattr(bot, "get_sessionmaker", _fake_sessionmaker)
     monkeypatch.delenv("WEBAPP_URL", raising=False)
 
     update = _Update()
@@ -131,6 +151,7 @@ async def test_akme_still_says_when_there_is_nothing(monkeypatch):
     monkeypatch.setattr(bot, "_get_state", _empty_state)
     monkeypatch.setattr(bot, "_ensure_db_session_for_user", _noop)
     monkeypatch.setattr(bot, "Repo", _Repo)
+    monkeypatch.setattr(bot, "get_sessionmaker", _fake_sessionmaker)
 
     update = _Update()
     await bot.akme_cmd(update, None)
