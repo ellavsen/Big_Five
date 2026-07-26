@@ -43,6 +43,16 @@ DISCLAIMER = (
 
 UNKNOWN = 0.5
 
+# Человеческие названия черт. Живут здесь, потому что нужны и боту, и Mini App:
+# два списка разъехались бы при первой же правке формулировки.
+TRAIT_TITLES: dict[Trait, str] = {
+    Trait.OPENNESS: "открытость опыту",
+    Trait.CONSCIENTIOUSNESS: "добросовестность",
+    Trait.EXTRAVERSION: "экстраверсия",
+    Trait.AGREEABLENESS: "доброжелательность",
+    Trait.NEUROTICISM: "реактивность на стресс",
+}
+
 
 def trait_value(trait: Trait, evidence: TraitEvidence) -> float:
     """Выраженность черты 0..1, посчитанная из накопленных наблюдений.
@@ -68,6 +78,16 @@ def trait_value(trait: Trait, evidence: TraitEvidence) -> float:
 
     value = UNKNOWN + shift if weight.direction is Direction.HIGH else UNKNOWN - shift
     return round(value, 2)
+
+
+def undetermined_traits(evidence: TraitEvidence) -> list[Trait]:
+    """Черты, по которым данных не хватило — те, что остались ровно посередине.
+
+    Нужны, чтобы бот мог честно сказать, насколько полна карта, прежде чем
+    предлагать итог. Раньше он обещал «целостную картину» при трёх неизвестных
+    чертах из пяти.
+    """
+    return [t for t in Trait if trait_value(t, evidence) == UNKNOWN]
 
 
 def trait_scores_from_evidence(evidence: TraitEvidence) -> TraitScores:

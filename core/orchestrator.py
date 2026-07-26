@@ -15,7 +15,7 @@ from core.validity import (
     is_profile_sufficient,
     weigh_trait,
 )
-from core.scoring import trait_scores_from_evidence
+from core.scoring import TRAIT_TITLES, trait_scores_from_evidence, undetermined_traits
 from core.transitions import choose_agent, choose_priority_goal
 from core.config import STRICT_MODE, STRICT_VL_THRESHOLD
 from core.utils import serialize_trait_evidence
@@ -31,6 +31,43 @@ def _update_trait_closed(state: ConversationState) -> None:
     for trait in Trait:
         state.trait_closed[trait] = trait_is_closed(trait, state.evidence)
         state.soft_trait_closed[trait] = soft_trait_closed(trait, state.evidence)
+
+
+def readiness_offer(state: ConversationState) -> str:
+    """Предложение подвести итог — с честной оценкой полноты карты.
+
+    Раньше здесь стояло «у меня уже сложилась целостная картина». При трёх
+    неизвестных чертах из пяти это была неправда, и человек соглашался на итог,
+    не понимая, что половина карты — это «не знаю».
+
+    Критерий выразимости считает черту набранной, если по ней есть хоть одно
+    наблюдение, а шкала честно ставит 0.5, пока наблюдений меньше двух. Пока эти
+    два порога не сведены, разница должна быть **сказана вслух**: удлинять
+    разговор всем подряд хуже, чем дать человеку выбрать со знанием дела.
+    """
+    missing = undetermined_traits(state.evidence)
+
+    if not missing:
+        return (
+            "Кажется, картина сложилась: по всем пяти чертам набралось "
+            "достаточно наблюдений.\n\n"
+            "Подвести итог — или продолжим разговор?"
+        )
+
+    known = [t for t in Trait if t not in missing]
+
+    def names(traits) -> str:
+        return ", ".join(TRAIT_TITLES[t] for t in traits)
+
+    return (
+        "Могу подвести итог — но честно скажу: пока это минимальная картина, "
+        "а не полная.\n\n"
+        f"Набралось: {names(known)}.\n"
+        f"Данных не хватило: {names(missing)}. В итоге эти черты останутся "
+        "посередине — это честное «не знаю», а не «средне».\n\n"
+        "Рекомендую продолжить разговор: ещё несколько историй — и картина "
+        "станет точнее. Но если хочешь итог сейчас, подведу."
+    )
 
 
 def _update_goals_mvp(state: ConversationState) -> None:
@@ -177,10 +214,7 @@ class Orchestrator:
             return AgentResponse(
                 agent_communication=self._build_agent_comm(state),
                 A="ask",
-                message=(
-                    "Кажется, у меня уже сложилась целостная картина. "
-                    "Хочешь, подведу итог — или продолжим разговор?"
-                ),
+                message=readiness_offer(state),
             )
 
         # 5.6) Если пользователь подтвердил итог — синтезируем (STRICT_MODE не блокирует)

@@ -30,6 +30,7 @@ from core.db.database import get_sessionmaker
 from core.db.repo import Repo
 from core.models import TraitScores
 from core.scoring import MBTI_MAPPING, mbti_from_traits
+from core.scoring import TRAIT_TITLES as TRAIT_NAMES
 from modules.akme_vector import akme_vector_from_synthesis
 
 logger = logging.getLogger(__name__)
@@ -38,13 +39,10 @@ logger = logging.getLogger(__name__)
 # здесь же. Иначе токен окажется пустым и все запросы будут молча получать 401.
 load_dotenv()
 
-TRAIT_TITLES = {
-    "openness": "Открытость опыту",
-    "conscientiousness": "Добросовестность",
-    "extraversion": "Экстраверсия",
-    "agreeableness": "Доброжелательность",
-    "neuroticism": "Реактивность на стресс",
-}
+# Названия берём из core/scoring.py — единственного места, где они заданы:
+# бот и эта страница обязаны называть черты одинаково. Здесь только заглавная
+# буква, потому что в интерфейсе это заголовок, а в реплике бота — часть фразы.
+TRAIT_TITLES = {t.value: title.capitalize() for t, title in TRAIT_NAMES.items()}
 
 
 class TraitOut(BaseModel):
