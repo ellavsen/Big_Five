@@ -66,8 +66,11 @@ def test_akme_vector_from_llm_synthesis():
     assert "самостоятельный анализ" not in akme.core
     assert "избыточный контроль процессов" in akme.unload
     assert len(akme.environment) >= 1
-    # роль + компенсация в notes обязаны попасть в риски
-    assert any("компенсац" in r for r in akme.risk)
+    # роль + компенсация в notes обязаны попасть в риски.
+    # Формулировки — действия, а не ярлыки, поэтому ищем совет, а не слово «компенсация»:
+    # «Выписывай раз в неделю, что делалось "потому что надо"» и «Лови фразу "надо потерпеть"».
+    assert any("потому что надо" in r for r in akme.risk), "роль обязана дать совет про счёт за неё"
+    assert any("надо потерпеть" in r for r in akme.risk), "компенсация в notes обязана дать совет"
 
 
 def test_akme_vector_survives_empty_synthesis():
@@ -99,18 +102,18 @@ def test_akme_reads_structured_output_verbatim():
 
     assert "роли с аналитической ответственностью" in akme.core
     assert "избыточный контроль процессов" in akme.unload
-    # низкая экстраверсия -> тишина; низкая открытость -> конкретика;
-    # высокая добросовестность -> риск гиперконтроля
+    # низкая экстраверсия -> тишина; низкая открытость -> шаги с видимым результатом;
+    # высокая добросовестность -> совет про перепроверку за другими
     assert any("тишин" in u for u in akme.unload)
-    assert any("конкрет" in c for c in akme.core)
-    assert any("контрол" in r for r in akme.risk)
+    assert any("видимым результатом" in c for c in akme.core)
+    assert any("не проверю" in r for r in akme.risk)
 
 
 # --- то, ради чего заводилась пятая черта ---
 
 @pytest.mark.parametrize("neuroticism,expected", [
-    (0.85, "усталость накапливается"),
-    (0.15, "устойчивость под нагрузкой"),
+    (0.85, "плечи, челюсть и дыхание"),   # высокая: ловить усталость раньше телесного сигнала
+    (0.15, "когда вокруг штормит"),       # низкая: на устойчивость можно опираться
 ])
 def test_neuroticism_drives_the_burnout_block(neuroticism, expected):
     """
@@ -158,5 +161,6 @@ def test_stable_core_traits_are_not_presented_as_strengths():
 
     assert "работа с конкретными задачами" in akme.core
     assert "чувствительность к стрессу" not in akme.core
-    # но само наблюдение не теряется: роль по-прежнему уезжает в риски
-    assert any("энергозатрат" in r for r in akme.risk)
+    # но само наблюдение не теряется: роль по-прежнему уезжает в риски —
+    # теперь советом «выписывай, что делалось потому что надо», а не ярлыком
+    assert any("потому что надо" in r for r in akme.risk)
