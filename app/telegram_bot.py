@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pydantic import ValidationError
 from telegram import (
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardRemove,
@@ -786,6 +787,27 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+# Команды бота. Обработчики — единственный источник правды о том, что вообще
+# существует; MENU_COMMANDS — то, что показывается в меню Telegram.
+COMMAND_HANDLERS = {
+    "start": start,
+    "akme": akme_cmd,
+    "reset": reset_cmd,
+    "export": export_cmd,
+    "delete_me": delete_me_cmd,
+}
+
+# Меню держим в коде, а не в BotFather: у токена оставалось меню от другого
+# проекта (/sos, /translate), и половина настоящих команд была не видна.
+# /export наружу не выносим — она выгружает ПДн, лишний повод нажать не нужен.
+MENU_COMMANDS = [
+    BotCommand("start", "Начать разговор заново"),
+    BotCommand("akme", "Практические рекомендации"),
+    BotCommand("reset", "Сбросить текущий разговор"),
+    BotCommand("delete_me", "Удалить мои данные"),
+]
+
+
 def run_bot():
     llm = AsyncLLMClient()
     orchestrator = Orchestrator(
@@ -801,6 +823,9 @@ def run_bot():
     async def _post_init(application):
         await init_db()
 
+        # Затирает всё, что настроено у токена вручную, — так и надо.
+        await application.bot.set_my_commands(MENU_COMMANDS)
+
         # Ретеншен на старте процесса. Это половина решения: пока бот не
         # перезапускают, просроченное лежит. В проде нужен cron или воркер —
         # см. docs/ROADMAP.md.
@@ -812,11 +837,8 @@ def run_bot():
 
     app.post_init = _post_init
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("akme", akme_cmd))
-    app.add_handler(CommandHandler("reset", reset_cmd))
-    app.add_handler(CommandHandler("export", export_cmd))
-    app.add_handler(CommandHandler("delete_me", delete_me_cmd))
+    for name, handler in COMMAND_HANDLERS.items():
+        app.add_handler(CommandHandler(name, handler))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_audio))

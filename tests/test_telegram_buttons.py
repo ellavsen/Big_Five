@@ -74,6 +74,17 @@ def context() -> _FakeContext:
     )
 
 
+def test_menu_commands_all_have_handlers():
+    """
+    У токена оставалось меню от другого проекта (/sos, /translate): команды в меню
+    были, обработчиков не было, а настоящие команды не показывались.
+    """
+    menu = [c.command for c in bot.MENU_COMMANDS]
+    assert menu, "меню не должно быть пустым: иначе останется то, что настроено в BotFather"
+    unhandled = [c for c in menu if c not in bot.COMMAND_HANDLERS]
+    assert unhandled == [], f"в меню есть команды без обработчика: {unhandled}"
+
+
 @pytest.mark.asyncio
 async def test_show_transcript_button(saved, context):
     """Раньше: NameError: fixed_text — переменной в этой ветке не существует."""
